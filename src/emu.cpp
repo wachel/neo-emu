@@ -183,10 +183,10 @@ u16 io_read16(u32 addr) {
     }
     case 0x34: case 0x35: return (u16)((g_in_p2 << 8) | 0xFF); // IN1
     case 0x36: case 0x37: return (u16)unmapped_word();
-    case 0x38: case 0x39: { // SYSTEM
-        u16 v = 0xFAFF;
-        if (g_in_start & 1) v |= 0x0100;                    // P1 start (active high)
-        if (g_in_start & 4) v |= 0x0400;                    // P2 start (active high)
+    case 0x38: case 0x39: { // SYSTEM (REG_STATUS_B): start/select are active low
+        u16 v = 0xFFFF;
+        if (g_in_start & 1) v &= ~0x0100;                   // P1 start
+        if (g_in_start & 4) v &= ~0x0400;                   // P2 start
         if (!(g_in_select & 1)) v &= ~0x0200;               // select 1 (active low)
         if (!(g_in_select & 4)) v &= ~0x0800;               // select 2 (active low)
         return v;

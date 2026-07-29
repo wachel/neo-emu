@@ -206,7 +206,7 @@ void rtc_write(u8 data);
 
 // ---- input (set by platform layer) ----
 extern u8 g_in_p1, g_in_p2;       // active-low: bit0 up,1 down,2 left,3 right,4 A,5 B,6 C,7 D
-extern u8 g_in_start;             // bit0 P1 start, bit2 P2 start (active HIGH in SYSTEM)
+extern u8 g_in_start;             // bit0 P1 start, bit2 P2 start (logical 1=pressed; SYSTEM output is active low)
 extern u8 g_in_coin;              // AUDIO_COIN low byte bits (active low): 0 c1,1 c2,2 service1,3 c3,4 c4
 extern u8 g_in_select;            // SYSTEM: bit1 ->0x0200, bit3 ->0x0800 (active low)
 extern int g_in_service;          // TEST port 0x0080 (active low)

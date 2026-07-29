@@ -1,5 +1,6 @@
 // Machine state, memory-map I/O, ROM loading, event scheduling.
 #include "rt.h"
+#include "romload.h"
 
 u8 *g_prom, *g_bios, *g_wram, *g_bram, *g_crom, *g_sfix, *g_s1, *g_zoomy;
 u8 *g_m1, *g_sm1, *g_vrom;
@@ -482,21 +483,36 @@ void machine_frame() {
 
 void machine_init() {
     size_t sz;
-    g_prom = load_file("rom/prom.bin", &sz);
-    g_bios = load_file("rom/bios.bin", &sz);
-    g_sfix = load_file("rom/sfix.bin", &sz);
-    g_s1 = load_file("rom/s1.bin", &sz);
-    g_zoomy = load_file("rom/zoomy.bin", &sz);
-    g_crom = load_file("rom/crom.bin", &sz);
-    g_sm1 = load_file("rom/sm1.bin", &sz);
-    g_vrom = load_file("rom/vrom.bin", &sz);
-    // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
-    g_m1 = (u8 *)malloc(0x50000);
-    {
-        u8 *t = load_file("rom/m1.bin", &sz);
-        memcpy(g_m1, t, sz);
-        memcpy(g_m1 + 0x10000, t, sz);
-        free(t);
+    // Preferred: load straight from the MAME zip sets. Fall back to the
+    // prebuilt rom/*.bin images when the zips are not present.
+    RomSet rs;
+    if (romset_load_zip("roms/kof98.zip", "roms/neogeo.zip", &rs) == 0) {
+        fprintf(stderr, "ROMs: loaded from roms/kof98.zip + roms/neogeo.zip\n");
+        g_prom = rs.prom; g_bios = rs.bios; g_sfix = rs.sfix; g_s1 = rs.s1;
+        g_zoomy = rs.zoomy; g_crom = rs.crom; g_sm1 = rs.sm1; g_vrom = rs.vrom;
+        // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
+        g_m1 = (u8 *)malloc(0x50000);
+        memcpy(g_m1, rs.m1, rs.m1_sz);
+        memcpy(g_m1 + 0x10000, rs.m1, rs.m1_sz);
+        free(rs.m1);
+    } else {
+        fprintf(stderr, "ROMs: roms/*.zip not usable, falling back to rom/*.bin\n");
+        g_prom = load_file("rom/prom.bin", &sz);
+        g_bios = load_file("rom/bios.bin", &sz);
+        g_sfix = load_file("rom/sfix.bin", &sz);
+        g_s1 = load_file("rom/s1.bin", &sz);
+        g_zoomy = load_file("rom/zoomy.bin", &sz);
+        g_crom = load_file("rom/crom.bin", &sz);
+        g_sm1 = load_file("rom/sm1.bin", &sz);
+        g_vrom = load_file("rom/vrom.bin", &sz);
+        // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
+        g_m1 = (u8 *)malloc(0x50000);
+        {
+            u8 *t = load_file("rom/m1.bin", &sz);
+            memcpy(g_m1, t, sz);
+            memcpy(g_m1 + 0x10000, t, sz);
+            free(t);
+        }
     }
     g_wram = alloc_guarded("wram", 0x10000);
     g_bram = alloc_guarded("bram", 0x10000);

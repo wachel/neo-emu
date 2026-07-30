@@ -333,9 +333,7 @@ static inline u32 pen_rgb(int lvl5, int dark, int shadow) {
     return v;
 }
 
-void pal_write(u32 offset, u16 data) {
-    u32 off = g_palette_bank + offset;
-    g_palram[off] = data;
+static void pen_decode(u32 off, u16 data) {
     int dark = data >> 15;
     int r = ((data >> 14) & 1) | ((data >> 7) & 0x1E);
     int g = ((data >> 13) & 1) | ((data >> 3) & 0x1E);
@@ -344,6 +342,17 @@ void pal_write(u32 offset, u16 data) {
         u8 R = g_pal_lut[r][dark + 2 * sh], G = g_pal_lut[g][dark + 2 * sh], B = g_pal_lut[b][dark + 2 * sh];
         g_pens[off + 0x2000 * sh] = 0xFF000000 | (R << 16) | (G << 8) | B;
     }
+}
+
+void pal_write(u32 offset, u16 data) {
+    u32 off = g_palette_bank + offset;
+    g_palram[off] = data;
+    pen_decode(off, data);
+}
+
+// rebuild the derived pens cache from palram (needed after state load)
+static void pal_rebuild() {
+    for (u32 i = 0; i < 0x2000; i++) pen_decode(i, g_palram[i]);
 }
 
 // ---- interrupts ----
@@ -660,4 +669,5 @@ void emu_state_load(const u8 *buf) {
     memcpy(g_z80_ram, buf, 0x800); buf += 0x800;
     memcpy(g_palram, buf, 0x4000); buf += 0x4000;
     memcpy(g_vram, buf, 0x11000); buf += 0x11000;
+    pal_rebuild();  // pens 是 palram 的派生缓存, 不存入快照, 载入后必须重建
 }

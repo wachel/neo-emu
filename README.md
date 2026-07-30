@@ -56,7 +56,7 @@ build\kof98native.exe      # 把 roms\ 放在 exe 旁边，双击即玩
 | 选择 | 3 | 4 |
 | 投币 | 5 | 6 |
 
-`F2` 测试菜单，`ESC` 退出。`bram.bin` 为电池记忆，自动读写。
+`F2` 测试菜单，`F5` 保存快照 / `F7` 加载快照（exe 旁 `save.k98s`，与 RL 动态库的快照格式一致，可直接互相加载），`ESC` 退出。`bram.bin` 为电池记忆，自动读写。启动时可用 `KOF98_LOAD_STATE=快照路径` 直接进入快照。快捷键均可在 exe 旁 `kof98.ini` 中改绑（`state_save` / `state_load`）。
 
 > 界面版目前只有 Windows。Linux/macOS 上可以用下方的 Python 查看器（pygame）代替。
 

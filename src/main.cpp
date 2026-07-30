@@ -12,7 +12,7 @@ static int g_key[256];
 
 // ---- configurable keys (kof98.ini next to the exe) ----
 static int k_p1[8], k_p2[8], k_p1_start, k_p2_start, k_p1_coin, k_p2_coin,
-           k_svc_coin, k_p1_sel, k_p2_sel, k_test, k_quit;
+           k_svc_coin, k_p1_sel, k_p2_sel, k_test, k_quit, k_ssave, k_sload;
 struct Bind { const char *name; const char *def; int *slot; };
 static Bind g_binds[] = {
     {"p1_up", "UP", &k_p1[0]}, {"p1_down", "DOWN", &k_p1[1]},
@@ -25,6 +25,7 @@ static Bind g_binds[] = {
     {"p2_c", "NUMPAD3", &k_p2[6]}, {"p2_d", "NUMPAD4", &k_p2[7]},
     {"p2_start", "2", &k_p2_start}, {"p2_select", "4", &k_p2_sel}, {"p2_coin", "6", &k_p2_coin},
     {"service_coin", "7", &k_svc_coin}, {"test", "F2", &k_test}, {"quit", "ESCAPE", &k_quit},
+    {"state_save", "F5", &k_ssave}, {"state_load", "F7", &k_sload},
     {NULL, NULL, NULL}
 };
 
@@ -98,9 +99,17 @@ static void poll_input() {
     if (g_key[k_quit]) g_quit = 1;
 }
 
+static void state_key_edge(int vk);  // defined below (state save/load)
+
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DESTROY) { g_quit = 1; PostQuitMessage(0); return 0; }
-    if (m == WM_KEYDOWN) { g_key[w & 0xFF] = 1; return 0; }
+    if (m == WM_KEYDOWN) {
+        g_key[w & 0xFF] = 1;
+        // edge-triggered here (not per-frame): key taps shorter than one frame
+        // would be missed by polling g_key in the main loop
+        if (!((l >> 30) & 1)) state_key_edge((int)w);  // skip autorepeat
+        return 0;
+    }
     if (m == WM_KEYUP) { g_key[w & 0xFF] = 0; return 0; }
     return DefWindowProc(h, m, w, l);
 }
@@ -168,6 +177,80 @@ static void save_bmp(const char *path) {
     fclose(f);
 }
 
+// ---- save state hotkeys (F5 save / F7 load) ----
+// File format is byte-identical to the RL DLL's kof98_state_save (magic 'K98S'
+// + ver + section sizes + emu/z80/ym), so snapshots are interchangeable with
+// the Python side: exe F5 -> usable as an RL checkpoint, and vice versa.
+int emu_state_size(); void emu_state_save(u8 *buf); void emu_state_load(const u8 *buf);
+int z80_state_size(); void z80_state_save(u8 *buf); void z80_state_load(const u8 *buf);
+int ym_state_size();  void ym_state_save(u8 *buf);  void ym_state_load(const u8 *buf);
+
+#define STATE_FILE "save.k98s"
+static u8 *g_state_buf;
+static int g_state_size;
+
+static void state_init() {
+    g_state_size = 16 + emu_state_size() + z80_state_size() + ym_state_size();
+    g_state_buf = (u8 *)malloc(g_state_size);
+}
+
+static int state_save_file(const char *path) {
+    if (!g_state_buf) return 0;
+    u32 magic = 0x4B393853, ver = 1, esz = (u32)emu_state_size(), ysz = (u32)ym_state_size();
+    u8 *p = g_state_buf;
+    memcpy(p, &magic, 4); p += 4;
+    memcpy(p, &ver, 4); p += 4;
+    memcpy(p, &esz, 4); p += 4;
+    memcpy(p, &ysz, 4); p += 4;
+    emu_state_save(p); p += esz;
+    z80_state_save(p); p += z80_state_size();
+    ym_state_save(p);
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    fwrite(g_state_buf, 1, g_state_size, f);
+    fclose(f);
+    return 1;
+}
+
+static int state_load_file(const char *path) {
+    if (!g_state_buf) return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    int n = (int)fread(g_state_buf, 1, g_state_size, f);
+    fclose(f);
+    u32 magic, esz, ysz;
+    memcpy(&magic, g_state_buf, 4);
+    memcpy(&esz, g_state_buf + 8, 4);
+    memcpy(&ysz, g_state_buf + 12, 4);
+    if (n != g_state_size || magic != 0x4B393853 || (int)esz != emu_state_size() || (int)ysz != ym_state_size())
+        return 0;
+    const u8 *p = g_state_buf + 16;
+    emu_state_load(p); p += esz;
+    z80_state_load(p); p += z80_state_size();
+    ym_state_load(p);
+    return 1;
+}
+
+static int g_osd_frames;
+static void osd(const char *msg) {
+    char title[128];
+    snprintf(title, sizeof(title), "KOF98 native - %s", msg);
+    SetWindowTextA(g_hwnd, title);
+    g_osd_frames = 90;
+}
+
+static void state_key_edge(int vk) {
+    if (vk == k_ssave)
+        osd(state_save_file(STATE_FILE) ? "state saved -> " STATE_FILE : "state save FAILED");
+    else if (vk == k_sload)
+        osd(state_load_file(STATE_FILE) ? "state loaded <- " STATE_FILE : "no state file / bad state");
+}
+
+static void osd_tick() {
+    if (g_osd_frames > 0 && --g_osd_frames == 0)
+        SetWindowTextA(g_hwnd, "KOF98 native");
+}
+
 static int g_cur_frame;
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     FILE *f = fopen("crash.txt", "w");
@@ -207,6 +290,12 @@ int main(int argc, char **argv) {
         return 0;
     }
     machine_init();
+    state_init();
+    // optional: boot directly into a snapshot (same format as F5/DLL saves)
+    if (getenv("KOF98_LOAD_STATE")) {
+        if (!state_load_file(getenv("KOF98_LOAD_STATE")))
+            fprintf(stderr, "KOF98_LOAD_STATE: failed to load %s\n", getenv("KOF98_LOAD_STATE"));
+    }
 
     const char *hl = getenv("KOF98_HEADLESS");
     if (hl) {
@@ -300,6 +389,11 @@ int main(int argc, char **argv) {
     LARGE_INTEGER freq, last;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&last);
+    // KOF98_PERF=1: 每帧各阶段墙钟耗时(us)写到 perf.txt (性能诊断)
+    FILE *perf = getenv("KOF98_PERF") ? fopen("perf.txt", "w") : NULL;
+    LARGE_INTEGER q0, q1, q2, q3;
+    int perf_frame = 0;
+    long long perf_q3_prev = 0;
     const double frame_ms = 1000.0 / (6000000.0 / 384.0 / 264.0);
     int win_frames = getenv("KOF98_WINFRAMES") ? atoi(getenv("KOF98_WINFRAMES")) : 0;
     int frames_run = 0;
@@ -308,13 +402,26 @@ int main(int argc, char **argv) {
         MSG msg;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessage(&msg); }
         poll_input();
+        osd_tick();
+        QueryPerformanceCounter(&q0);
         machine_frame();
+        QueryPerformanceCounter(&q1);
         audio_pump();
+        QueryPerformanceCounter(&q2);
         if (win_frames && ++frames_run >= win_frames) break;
         HDC dc = GetDC(g_hwnd);
         RECT rc; GetClientRect(g_hwnd, &rc);
         StretchDIBits(dc, 0, 0, rc.right, rc.bottom, 0, 0, SCREEN_W, SCREEN_H, g_fb, &g_bmi, DIB_RGB_COLORS, SRCCOPY);
         ReleaseDC(g_hwnd, dc);
+        QueryPerformanceCounter(&q3);
+        if (perf) {
+            long long itv = perf_q3_prev ? (q3.QuadPart - perf_q3_prev) * 1000000 / freq.QuadPart : 0;
+            perf_q3_prev = q3.QuadPart;
+            fprintf(perf, "%d %lld %lld %lld %lld\n", ++perf_frame,
+                    (long long)((q1.QuadPart - q0.QuadPart) * 1000000 / freq.QuadPart),
+                    (long long)((q2.QuadPart - q1.QuadPart) * 1000000 / freq.QuadPart),
+                    (long long)((q3.QuadPart - q2.QuadPart) * 1000000 / freq.QuadPart), itv);
+        }
 
         LARGE_INTEGER now; QueryPerformanceCounter(&now);
         double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / freq.QuadPart;

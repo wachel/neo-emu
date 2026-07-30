@@ -55,8 +55,8 @@ void kof98_set_input(uint8_t p1, uint8_t p2, uint8_t start, uint8_t coin) {
     // API takes 1=pressed bits; hardware globals are active-low
     g_in_p1 = (u8)~p1;
     g_in_p2 = (u8)~p2;
-    g_in_start = start ? 1 : 0;
-    g_in_coin = coin ? (u8)0xFE : (u8)0xFF;   // coin1 = bit0 low
+    g_in_start = start & 0x05;            // bit0 P1 start, bit2 P2 start
+    g_in_coin = (u8)~(coin & 0x1F);       // bit0 c1, bit1 c2, bit2 service1 (active low)
 }
 
 uint8_t  kof98_peek8(uint32_t addr)  { return mem_read8(addr); }

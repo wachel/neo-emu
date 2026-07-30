@@ -37,7 +37,8 @@ KOF98_EXPORT int kof98_boot(const char *roms_dir, unsigned flags);
 KOF98_EXPORT void kof98_step_frame(void);
 
 // Set controller state. p1/p2: KOF98_* button bits (1 = pressed).
-// start/coin: 1 = pressed.
+// start: bit0 = P1 start, bit2 = P2 start. coin: bit0 = coin1, bit1 = coin2,
+// bit2 = service1. (1 = pressed)
 KOF98_EXPORT void kof98_set_input(uint8_t p1, uint8_t p2, uint8_t start, uint8_t coin);
 
 // Byte/word/dword read from the 68k address space (observations: WRAM at

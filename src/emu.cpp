@@ -487,13 +487,19 @@ void machine_frame() {
     guards_check(g_frame_count);
 }
 
+const char *g_roms_dir = "roms";
+
 void machine_init() {
     size_t sz;
+    char path[1024];
     // Preferred: load straight from the MAME zip sets. Fall back to the
     // prebuilt rom/*.bin images when the zips are not present.
     RomSet rs;
-    if (romset_load_zip("roms/kof98.zip", "roms/neogeo.zip", &rs) == 0) {
-        fprintf(stderr, "ROMs: loaded from roms/kof98.zip + roms/neogeo.zip\n");
+    snprintf(path, sizeof(path), "%s/kof98.zip", g_roms_dir);
+    char path2[1024];
+    snprintf(path2, sizeof(path2), "%s/neogeo.zip", g_roms_dir);
+    if (romset_load_zip(path, path2, &rs) == 0) {
+        fprintf(stderr, "ROMs: loaded from %s + %s\n", path, path2);
         g_prom = rs.prom; g_bios = rs.bios; g_sfix = rs.sfix; g_s1 = rs.s1;
         g_zoomy = rs.zoomy; g_crom = rs.crom; g_sm1 = rs.sm1; g_vrom = rs.vrom;
         // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
@@ -502,7 +508,7 @@ void machine_init() {
         memcpy(g_m1 + 0x10000, rs.m1, rs.m1_sz);
         free(rs.m1);
     } else {
-        fprintf(stderr, "ROMs: roms/*.zip not usable, falling back to rom/*.bin\n");
+        fprintf(stderr, "ROMs: %s/*.zip not usable, falling back to rom/*.bin\n", g_roms_dir);
         g_prom = load_file("rom/prom.bin", &sz);
         g_bios = load_file("rom/bios.bin", &sz);
         g_sfix = load_file("rom/sfix.bin", &sz);
@@ -542,4 +548,116 @@ void machine_init() {
     video_init();
     if (getenv("KOF98_TRACE")) g_trace = fopen("trace.txt", "w");
     cpu_reset(1);
+}
+
+// ---------------------------------------------------------------------------
+// save-state (RL interface). Layout: scalar header, then the big RAM buffers.
+// ROMs and derived caches (fb/pens/spr8/cov) are intentionally excluded.
+// ---------------------------------------------------------------------------
+extern u32 g_usp, g_ssp;
+
+struct EmuStateHdr {
+    Cpu cpu;
+    u32 usp, ssp;
+    s32 use_cart_vectors, use_cart_audio, save_ram_unlocked, palette_bank, screen_shadow;
+    u32 bank_base;
+    s32 irq_vblank, irq_raster, irq3, irq_level;
+    u64 irq2_cycle, frame_base;
+    s32 vpos, kof98_prot_state;
+    u16 prot_rom0, prot_rom1;
+    u8 in_p1, in_p2, in_start, in_coin, in_select;
+    s32 in_service;
+    u8 dsw;
+    u16 vram_offset, vram_modulo, vram_readbuf;
+    u8 auto_anim_speed, auto_anim_disabled, auto_anim_counter, auto_anim_frame;
+    u32 display_counter;
+    u8 irq2_ctrl;
+    u64 watchdog_cycle;
+    u8 sound_reply;
+    s32 frame_count, frame_restart;
+    s32 z80_nmi_enabled;
+    u8 sound_cmd;
+    u8 rtc_data_in, rtc_clk, rtc_stb, rtc_shift[7], rtc_out;
+    s32 rtc_bitpos;
+    u32 z80_bank_base[4];
+};
+
+int emu_state_size() {
+    return (int)(sizeof(EmuStateHdr) + 0x10000 + 0x10000 + 0x800 + 0x4000 + 0x11000);
+}
+
+void emu_state_save(u8 *buf) {
+    EmuStateHdr h;
+    h.cpu = cpu; h.usp = g_usp; h.ssp = g_ssp;
+    h.use_cart_vectors = g_use_cart_vectors; h.use_cart_audio = g_use_cart_audio;
+    h.save_ram_unlocked = g_save_ram_unlocked; h.palette_bank = g_palette_bank;
+    h.screen_shadow = g_screen_shadow;
+    h.bank_base = g_bank_base;
+    h.irq_vblank = g_irq_vblank; h.irq_raster = g_irq_raster; h.irq3 = g_irq3;
+    h.irq_level = g_irq_level;
+    h.irq2_cycle = g_irq2_cycle; h.frame_base = g_frame_base;
+    h.vpos = g_vpos; h.kof98_prot_state = g_kof98_prot_state;
+    h.prot_rom0 = g_prot_rom0; h.prot_rom1 = g_prot_rom1;
+    h.in_p1 = g_in_p1; h.in_p2 = g_in_p2; h.in_start = g_in_start;
+    h.in_coin = g_in_coin; h.in_select = g_in_select;
+    h.in_service = g_in_service; h.dsw = g_dsw;
+    h.vram_offset = g_vram_offset; h.vram_modulo = g_vram_modulo;
+    h.vram_readbuf = g_vram_readbuf;
+    h.auto_anim_speed = g_auto_anim_speed; h.auto_anim_disabled = g_auto_anim_disabled;
+    h.auto_anim_counter = g_auto_anim_counter; h.auto_anim_frame = g_auto_anim_frame;
+    h.display_counter = g_display_counter;
+    h.irq2_ctrl = g_irq2_ctrl;
+    h.watchdog_cycle = g_watchdog_cycle;
+    h.sound_reply = g_sound_reply;
+    h.frame_count = g_frame_count; h.frame_restart = g_frame_restart;
+    h.z80_nmi_enabled = g_z80_nmi_enabled;
+    h.sound_cmd = g_sound_cmd;
+    h.rtc_data_in = rtc_data_in; h.rtc_clk = rtc_clk; h.rtc_stb = rtc_stb;
+    memcpy(h.rtc_shift, rtc_shift, 7); h.rtc_out = rtc_out;
+    h.rtc_bitpos = rtc_bitpos;
+    memcpy(h.z80_bank_base, g_z80_bank_base, sizeof(h.z80_bank_base));
+    memcpy(buf, &h, sizeof(h)); buf += sizeof(h);
+    memcpy(buf, g_wram, 0x10000); buf += 0x10000;
+    memcpy(buf, g_bram, 0x10000); buf += 0x10000;
+    memcpy(buf, g_z80_ram, 0x800); buf += 0x800;
+    memcpy(buf, g_palram, 0x4000); buf += 0x4000;
+    memcpy(buf, g_vram, 0x11000); buf += 0x11000;
+}
+
+void emu_state_load(const u8 *buf) {
+    EmuStateHdr h;
+    memcpy(&h, buf, sizeof(h)); buf += sizeof(h);
+    cpu = h.cpu; g_usp = h.usp; g_ssp = h.ssp;
+    g_use_cart_vectors = h.use_cart_vectors; g_use_cart_audio = h.use_cart_audio;
+    g_save_ram_unlocked = h.save_ram_unlocked; g_palette_bank = h.palette_bank;
+    g_screen_shadow = h.screen_shadow;
+    g_bank_base = h.bank_base;
+    g_irq_vblank = h.irq_vblank; g_irq_raster = h.irq_raster; g_irq3 = h.irq3;
+    g_irq_level = h.irq_level;
+    g_irq2_cycle = h.irq2_cycle; g_frame_base = h.frame_base;
+    g_vpos = h.vpos; g_kof98_prot_state = h.kof98_prot_state;
+    g_prot_rom0 = h.prot_rom0; g_prot_rom1 = h.prot_rom1;
+    g_in_p1 = h.in_p1; g_in_p2 = h.in_p2; g_in_start = h.in_start;
+    g_in_coin = h.in_coin; g_in_select = h.in_select;
+    g_in_service = h.in_service; g_dsw = h.dsw;
+    g_vram_offset = h.vram_offset; g_vram_modulo = h.vram_modulo;
+    g_vram_readbuf = h.vram_readbuf;
+    g_auto_anim_speed = h.auto_anim_speed; g_auto_anim_disabled = h.auto_anim_disabled;
+    g_auto_anim_counter = h.auto_anim_counter; g_auto_anim_frame = h.auto_anim_frame;
+    g_display_counter = h.display_counter;
+    g_irq2_ctrl = h.irq2_ctrl;
+    g_watchdog_cycle = h.watchdog_cycle;
+    g_sound_reply = h.sound_reply;
+    g_frame_count = h.frame_count; g_frame_restart = h.frame_restart;
+    g_z80_nmi_enabled = h.z80_nmi_enabled;
+    g_sound_cmd = h.sound_cmd;
+    rtc_data_in = h.rtc_data_in; rtc_clk = h.rtc_clk; rtc_stb = h.rtc_stb;
+    memcpy(rtc_shift, h.rtc_shift, 7); rtc_out = h.rtc_out;
+    rtc_bitpos = h.rtc_bitpos;
+    memcpy(g_z80_bank_base, h.z80_bank_base, sizeof(g_z80_bank_base));
+    memcpy(g_wram, buf, 0x10000); buf += 0x10000;
+    memcpy(g_bram, buf, 0x10000); buf += 0x10000;
+    memcpy(g_z80_ram, buf, 0x800); buf += 0x800;
+    memcpy(g_palram, buf, 0x4000); buf += 0x4000;
+    memcpy(g_vram, buf, 0x11000); buf += 0x11000;
 }

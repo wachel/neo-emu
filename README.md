@@ -1,60 +1,52 @@
 # KOF98 Native
 
-用 C++ 从零实现的 KOF'98（Neo Geo MVS）原生模拟器：M68000 + Z80 + YM2610 全软件模拟，Win32 窗口 / waveOut 音频，单 exe、无外部 DLL 依赖。
+用 C++ 从零实现的 KOF'98（Neo Geo MVS）原生模拟器：M68000 + Z80 + YM2610 全软件模拟。
 
-## 编译
+- **可玩版**：Win32 窗口 / waveOut 音频，单 exe、无外部 DLL 依赖（Windows）
+- **RL 训练接口**：纯 C 动态库（Windows / Linux / macOS，含 Apple Silicon），Python 直接调用
 
-### 1. 准备编译器
+## 快速开始
 
-下载 [zig 0.14.0 (windows-x86_64)](https://ziglang.org/download/) 并解压即可。zig 内置 clang，可直接编译 C++，无需安装 MSVC。
-
-### 2. 编译
-
-在源码根目录执行（PowerShell，把 zig 路径换成你的实际路径）：
-
-```powershell
-$z   = "tools\zig-windows-x86_64-0.14.0\zig.exe"
-$cpu = "-mcpu=x86_64_v3"   # 重要，见下方说明
-
-# 编译（12 个源文件）
-$srcs = "emu","video","cpu_interp","cpu_interp2","main","translated_stub","z80","ym2610","romload"
-foreach ($s in $srcs) { & $z c++ -O2 -std=c++17 $cpu -c -o "build\$s.o" "src\$s.cpp" }
-foreach ($s in "ymfm_adpcm","ymfm_opn","ymfm_ssg") { & $z c++ -O2 -std=c++17 $cpu -c -o "build\$s.o" "src\ymfm\$s.cpp" }
-
-# 链接
-& $z c++ -O2 $cpu -o build\kof98native.exe build\emu.o build\video.o build\cpu_interp.o build\cpu_interp2.o build\main.o build\translated_stub.o build\z80.o build\ym2610.o build\romload.o build\ymfm_adpcm.o build\ymfm_opn.o build\ymfm_ssg.o -lwinmm -lgdi32 -luser32
-```
-
-### 关于 `-mcpu`（分发必读）
-
-zig **默认按编译机器的 CPU 特性生成代码**。在支持 AVX-512 的新机器（如 Zen 4/5）上编出的 exe，拷到不支持的老机器上会立即闪退（崩溃码 `0xc000001d` 非法指令）。要分发给别人，必须显式指定基线：
-
-| 选项 | 要求 | 适用 |
-|---|---|---|
-| `-mcpu=x86_64_v3` | AVX2 | 2013 年后的 CPU（推荐） |
-| `-mcpu=x86_64_v2` | SSE4.2 | 2008 年后，更保险 |
-| `-mcpu=x86_64` | 无 | 任意 x86-64 |
-
-## ROM 准备
+### 1. 准备 ROM（必需）
 
 需要 MAME 格式的两个 ROM 集（请自行合法获取，本项目不含 ROM）：
 
 ```
-roms\kof98.zip
-roms\neogeo.zip
+roms/kof98.zip
+roms/neogeo.zip
 ```
 
-把 `roms\` 目录放在 exe 旁边即可——启动时程序自动解压、按 Neo Geo 内存布局拼接（含 KOF98 的 68k 程序 ROM 解密），无需任何预处理。
+启动时自动解压、按 Neo Geo 内存布局拼接（含 KOF98 的 68k 程序 ROM 解密），无需任何预处理。
 
-也兼容旧的 `rom\*.bin` 布局（找不到 `roms\*.zip` 时自动回退），bin 可用 `tools\py\prepare_roms.py` 从 zip 生成。
+### 2. 一键构建
 
-## 运行
+**Windows**（需要 [zig 0.14.0](https://ziglang.org/download/)，解压到 `tools\` 或加入 PATH）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+产物：`build\kof98native.exe`（可玩版）+ `build\lib\kof98.dll`（RL 接口）
+
+**Linux / macOS**（用系统自带编译器即可，无需 zig）：
+
+```sh
+sh build.sh
+```
+
+产物：`build/lib/libkof98.so`（Linux）或 `libkof98.dylib`（macOS）
+
+> 老的 x86-64 机器：`build.ps1` 默认 `-mcpu=x86_64_v3`（AVX2，2013 年后的 CPU）。
+> 遇到 `0xc000001d` 非法指令崩溃时，设 `$env:KOF98_CPU="x86_64_v2"` 再编。
+> 分发给别人的机器情况不明时同理——**不要用本机默认 CPU 特性编译**。
+
+## 可玩版（带界面）
 
 ```
-kof98native.exe
+build\kof98native.exe      # 把 roms\ 放在 exe 旁边，双击即玩
 ```
 
-首次运行会在 exe 旁生成 `kof98.ini`，可自定义键位。默认键位：
+默认键位：
 
 | 功能 | P1 | P2 |
 |---|---|---|
@@ -64,32 +56,72 @@ kof98native.exe
 | 选择 | 3 | 4 |
 | 投币 | 5 | 6 |
 
-其他：`F2` 测试菜单，`ESC` 退出。`bram.bin` 为电池记忆（存档），自动读写。
+`F2` 测试菜单，`ESC` 退出。`bram.bin` 为电池记忆，自动读写。
 
-调试：设置环境变量 `KOF98_HEADLESS=帧数` 可无窗口运行指定帧数后退出，并打印 CPU 状态，用于回归验证。
+> 界面版目前只有 Windows。Linux/macOS 上可以用下方的 Python 查看器（pygame）代替。
 
-## 打包分发
+## RL 训练接口（跨平台）
 
-只需三样（约 41 MB）：
+动态库导出纯 C 接口（`src/kof98_api.h`）：步进、输入、读内存观测、save-state、帧缓冲。
+Python 封装在 `tools/py/kof98env.py`：
+
+```python
+from kof98env import Kof98, A, RIGHT
+
+env = Kof98("roms")              # 默认最快配置（无视频/轻音频/音乐引擎关闭）
+env.set_input(coin=1); env.run(10)
+env.set_input(start=1); env.run(600)
+FIGHT_START = env.save()         # 215KB 快照，episode 重置 ~5µs
+
+env.load(FIGHT_START)            # 每局开始
+env.set_input(p1=A | RIGHT)
+env.run(1)
+x = env.wram16(0x1234)           # 读 WRAM 观测（地址按 KOF98 内存表）
+```
+
+性能（Ryzen 9 9950X）：无视频 ~6000 fps；开视频渲染 ~150 fps。
+多实例：每进程一个 `Kof98`（或 `Kof98VecEnv` 状态交换单进程多 env），多核用 `multiprocessing`。
+
+### 查看训练效果（带界面跑 agent）
+
+```sh
+pip install pygame numpy
+python tools/py/play_agent.py              # 键盘试玩，有声音（方向键+ZXCV，1 开始，5 投币）
+python tools/py/play_agent.py --fast       # 不限速
+python tools/py/play_agent.py --mute       # 无声（更快）
+```
+
+把你的策略填进 `play_agent.py` 的 `agent_input()`（每帧返回按键位），即可观看 agent 实战。
+快照回放：`--snap 快照文件`。
+
+### 测试
+
+```sh
+python tools/py/test_api.py     # 接口 + save/load 确定性验证
+```
+
+## headless 调试（无窗口）
 
 ```
-kof98native.exe
-roms\kof98.zip
-roms\neogeo.zip
+set KOF98_HEADLESS=帧数 && kof98native.exe     # 跑指定帧数后退出并打印状态/帧率
 ```
+
+速度优化开关（RL 默认全开，玩的时候不要开）：`KOF98_SKIP_VIDEO` / `KOF98_LITE_AUDIO` / `KOF98_NO_ZINT`。
 
 ## 源码结构
 
 ```
-src\
-  main.cpp          Win32 平台层：窗口、输入、音频输出、帧同步
-  emu.cpp           机器状态、内存映射 I/O、ROM 加载、帧调度
+src/
+  main.cpp          Win32 平台层：窗口、输入、音频输出（可玩版）
+  kof98_api.cpp/h   纯 C RL 接口（跨平台，无平台依赖）
+  emu.cpp           机器状态、内存映射 I/O、帧调度、save-state
   romload.cpp       直接读取 MAME zip（自包含 inflate）+ ROM 拼接 + kof98 解密
-  cpu_interp*.cpp   68k 解释器
-  translated_stub.cpp
+  cpu_interp*.cpp   68k 解释器（含 vblank 自旋快进）
   video.cpp         LSPC 视频：精灵 + fix 层渲染
-  z80.cpp           Z80 音频 CPU
-  ym2610.cpp        YM2610 封装
-  ymfm\             YMFM 音频核心（BSD 许可）
-tools\py\           离线工具（prepare_roms.py 等，非必需）
+  z80.cpp           Z80 音频 CPU（含空闲循环跳过/整调用 park）
+  ym2610.cpp        YM2610 封装（支持轻量音频模式）
+  ymfm/             YMFM 音频核心（BSD 许可）
+tools/py/           Python 工具：kof98env.py（RL 封装）、play_agent.py（查看器）、test_api.py
+build.ps1           Windows 一键构建（exe + dll）
+build.sh            Linux/macOS 一键构建（RL 动态库）
 ```

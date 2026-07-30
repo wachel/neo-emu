@@ -23,13 +23,17 @@ void cpu_check_irq() {
 // KOF98 main-loop vblank waits: TST.B ($2785,a5) + BEQ self. The flag is only
 // written by the IRQ1 handler, so when no IRQ is pending the loop is a pure
 // idle: safe to fast-forward to the next scheduling point (line end / irq2 /
-// watchdog). Disable with KOF98_NOSPIN=1. Result-identical, just skips idle.
+// watchdog). Disable with KOF98_NOSPIN=1.
+// CRITICAL: only skip while the flag is CLEAR. Once the IRQ sets it, the
+// loop's TST/BEQ must actually execute to observe it and exit -- skipping
+// unconditionally would strand the game in the wait loop forever.
 static int g_spin_opt = -1;
 static inline int spin_ff(u64 target) {
     if (g_spin_opt < 0) g_spin_opt = getenv("KOF98_NOSPIN") ? 0 : 1;
     if (!g_spin_opt || g_irq_level) return 0;
     switch (cpu.pc) {
     case 0x9f6e: case 0x9fe6: case 0xa142: case 0xa180: case 0xa1b0:
+        if (mem_read8((cpu.A[5] + 0x2785) & 0xFFFFFF) != 0) return 0;
         cpu.cyc = target;
         return 1;
     }

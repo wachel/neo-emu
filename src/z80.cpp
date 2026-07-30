@@ -103,6 +103,31 @@ void z80_run_until(u64 target) {
     }
 }
 
+void z80_trace_dump(FILE *f); // fwd
+
+// ---- save-state ----
+struct Z80State {
+    z80_t cpu;
+    u64 pins, cyc;
+    s32 irq_line, nmi_pending, parked;
+};
+
+int z80_state_size() { return (int)sizeof(Z80State); }
+
+void z80_state_save(u8 *buf) {
+    Z80State s;
+    s.cpu = g_cpu; s.pins = g_pins; s.cyc = g_z80_cyc;
+    s.irq_line = g_irq_line; s.nmi_pending = g_nmi_pending; s.parked = g_zparked;
+    memcpy(buf, &s, sizeof(s));
+}
+
+void z80_state_load(const u8 *buf) {
+    Z80State s;
+    memcpy(&s, buf, sizeof(s));
+    g_cpu = s.cpu; g_pins = s.pins; g_z80_cyc = s.cyc;
+    g_irq_line = s.irq_line; g_nmi_pending = s.nmi_pending; g_zparked = s.parked;
+}
+
 void z80_trace_dump(FILE *f) {
     for (int k = 200; k >= 1; k--)
         fprintf(f, "%04x\n", g_pcring[(g_pcring_pos - k) & 511]);

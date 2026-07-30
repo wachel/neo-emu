@@ -4,6 +4,7 @@
 // resampled to 44.1kHz stereo for the platform audio ring.
 #include "rt.h"
 #include "ymfm/ymfm_opn.h"
+#include <vector>
 
 extern u8 *g_vrom;
 void z80_set_irq(int on);
@@ -103,6 +104,48 @@ void ym2610_reset() {
     g_intf.timer_exp[0] = g_intf.timer_exp[1] = ~(u64)0;
     g_intf.busy_end = 0;
     audio_ring_clear();
+}
+
+// ---- save-state ----
+struct YmStateHdr {
+    u64 cur_cyc, timer_exp[2], busy_end;
+    u32 chip_size;
+};
+
+int ym_state_size() {
+    static int sz = -1;
+    if (sz < 0) {
+        std::vector<uint8_t> tmp;
+        ymfm::ymfm_saved_state ss(tmp, true);
+        g_chip->save_restore(ss);
+        sz = (int)(sizeof(YmStateHdr) + tmp.size());
+    }
+    return sz;
+}
+
+void ym_state_save(u8 *buf) {
+    YmStateHdr h;
+    h.cur_cyc = g_intf.cur_cyc;
+    h.timer_exp[0] = g_intf.timer_exp[0]; h.timer_exp[1] = g_intf.timer_exp[1];
+    h.busy_end = g_intf.busy_end;
+    std::vector<uint8_t> tmp;
+    ymfm::ymfm_saved_state ss(tmp, true);
+    g_chip->save_restore(ss);
+    h.chip_size = (u32)tmp.size();
+    memcpy(buf, &h, sizeof(h)); buf += sizeof(h);
+    memcpy(buf, tmp.data(), tmp.size());
+}
+
+void ym_state_load(const u8 *buf) {
+    YmStateHdr h;
+    memcpy(&h, buf, sizeof(h)); buf += sizeof(h);
+    g_intf.cur_cyc = h.cur_cyc;
+    g_intf.timer_exp[0] = h.timer_exp[0]; g_intf.timer_exp[1] = h.timer_exp[1];
+    g_intf.busy_end = h.busy_end;
+    std::vector<uint8_t> tmp(h.chip_size);
+    memcpy(tmp.data(), buf, h.chip_size);
+    ymfm::ymfm_saved_state ss(tmp, false);
+    g_chip->save_restore(ss);
 }
 
 // ---- clocking: 144 master cycles per engine output sample (55.5kHz) ----

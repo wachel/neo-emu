@@ -40,6 +40,11 @@ static inline int spin_ff(u64 target) {
     return 0;
 }
 
+// 68k PC 周期剖析 (KOF98_PROF api): g_prof[pc>>4] 累计周期, g_prof_n 累计指令数
+u32 *g_prof, *g_prof_n;
+u64 g_prof_instr;
+int g_prof_on;
+
 void cpu_run_until(u64 target) {
     u64 prev = ~(u64)0; int stagnant = 0;
     while (cpu.cyc < target) {
@@ -48,7 +53,16 @@ void cpu_run_until(u64 target) {
         if (cpu.stopped) { cpu.cyc = target; return; }
         if (spin_ff(target)) return;
         g_ntrace = 11;
-        cpu_interp_step();
+        if (g_prof_on) {
+            u32 ppc = cpu.pc;
+            u64 c0 = cpu.cyc;
+            cpu_interp_step();
+            g_prof[(ppc >> 4) & 0xFFFFF] += (u32)(cpu.cyc - c0);
+            g_prof_n[(ppc >> 4) & 0xFFFFF]++;
+            g_prof_instr++;
+        } else {
+            cpu_interp_step();
+        }
         g_ntrace = 1;
         if (cpu.cyc == prev) {          // native infinite-loop guard
             if (++stagnant > 1000) {

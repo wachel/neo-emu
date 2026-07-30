@@ -232,8 +232,11 @@ inline int cond_true(int cc) {
 }
 
 inline int popcount16(u32 v) {
-    v &= 0xFFFF; v = v - ((v >> 1) & 0x5555); v = (v & 0x3333) + ((v >> 2) & 0x3333);
-    return (int)(((v + (v >> 4)) & 0x0F0F) * 0x0101 >> 8);
+    v &= 0xFFFF;
+    v = v - ((v >> 1) & 0x5555);
+    v = (v & 0x3333) + ((v >> 2) & 0x3333);
+    v = (v + (v >> 4)) & 0x0F0F;   // 每字节一个 0-8 的和
+    return (int)((v + (v >> 8)) & 0xFF);   // 两个字节相加 = 总计数 (<=16)
 }
 
 void cpu_interp_hi(u16 op, u32 pc0, int &cyc);   // cases 0x8..0xE (cpu_interp2.cpp)

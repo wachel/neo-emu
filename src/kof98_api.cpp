@@ -7,6 +7,7 @@
 
 void machine_init();
 void machine_frame();
+void cpu_interp_step();
 int emu_state_size();
 void emu_state_save(u8 *buf);
 void emu_state_load(const u8 *buf);
@@ -105,4 +106,55 @@ void kof98_state_load(const void *buf_) {
     emu_state_load(buf); buf += esz;
     z80_state_load(buf); buf += zsz;
     ym_state_load(buf);
+}
+
+// ---- 68k PC 周期剖析 (诊断用) ----
+extern u32 *g_prof, *g_prof_n;
+extern u64 g_prof_instr;
+extern int g_prof_on;
+
+void kof98_prof_start() {
+    if (!g_prof) { g_prof = (u32 *)calloc(1 << 20, sizeof(u32)); g_prof_n = (u32 *)calloc(1 << 20, sizeof(u32)); }
+    else { memset(g_prof, 0, (1 << 20) * sizeof(u32)); memset(g_prof_n, 0, (1 << 20) * sizeof(u32)); }
+    g_prof_instr = 0;
+    g_prof_on = 1;
+}
+
+// 单条指令周期微基准 (诊断): 把 op 写到 WRAM 0x100100, 单步执行, 返回周期增量
+u64 kof98_dbg_step(uint16_t op, uint32_t d0, uint32_t d1) {
+    mem_write16(0x100100, op);
+    mem_write16(0x100102, 0x4E75);   // RTS (占位, 防扩展误读)
+    mem_write16(0x100104, 0x4E75);
+    cpu.D[0] = d0;
+    cpu.D[1] = d1;
+    cpu.pc = 0x100100;
+    u64 c0 = cpu.cyc;
+    cpu_interp_step();
+    return cpu.cyc - c0;
+}
+
+// dump: 16 字节桶, 按周期排序写出前 200 个 (含指令数与平均周期) + 总计
+int kof98_prof_dump(const char *path) {
+    if (!g_prof) return -1;
+    FILE *f = fopen(path, "w");
+    if (!f) return -2;
+    u64 total = 0, total_n = 0;
+    static u32 cyc[1 << 20], nin[1 << 20];
+    memcpy(cyc, g_prof, sizeof(cyc));
+    memcpy(nin, g_prof_n, sizeof(nin));
+    for (int i = 0; i < (1 << 20); i++) { total += cyc[i]; total_n += nin[i]; }
+    fprintf(f, "total_cycles=%llu total_instr=%llu avg=%.2f\n",
+            (unsigned long long)total, (unsigned long long)total_n,
+            total_n ? (double)total / total_n : 0.0);
+    for (int n = 0; n < 200; n++) {
+        int best = -1;
+        for (int i = 0; i < (1 << 20); i++)
+            if (cyc[i] && (best < 0 || cyc[i] > cyc[best])) best = i;
+        if (best < 0 || !cyc[best]) break;
+        fprintf(f, "pc=%06x cycles=%u n=%u cpi=%.1f\n", best << 4, cyc[best], nin[best],
+                nin[best] ? (double)cyc[best] / nin[best] : 0.0);
+        cyc[best] = 0;
+    }
+    fclose(f);
+    return 0;
 }

@@ -47,6 +47,12 @@ KOF98_EXPORT uint8_t  kof98_peek8(uint32_t addr);
 KOF98_EXPORT uint16_t kof98_peek16(uint32_t addr);
 KOF98_EXPORT uint32_t kof98_peek32(uint32_t addr);
 
+// 68k PC 周期剖析 (诊断): start 清零并开启, dump 写出最热区域到文件
+KOF98_EXPORT void kof98_prof_start(void);
+KOF98_EXPORT int kof98_prof_dump(const char *path);
+// 单条指令周期微基准 (诊断)
+KOF98_EXPORT uint64_t kof98_dbg_step(uint16_t op, uint32_t d0, uint32_t d1);
+
 // Framebuffer: 320x224, u32 pixels as 0x00RRGGBB (little-endian bytes B,G,R,0
 // = "BGRA" for SDL/pygame). Only valid with KOF98F_VIDEO.
 KOF98_EXPORT const uint32_t *kof98_framebuffer(int *width, int *height);

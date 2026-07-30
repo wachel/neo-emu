@@ -1,0 +1,99 @@
+# KOF98 Native -- cross-platform release builds.
+# Trigger: push a version tag (git tag v0.1.0 && git push origin v0.1.0)
+#          or run manually from the Actions tab (artifacts only, no release).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create GitHub Releases
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+      - name: build (exe + dll)
+        run: powershell -ExecutionPolicy Bypass -File build.ps1
+      - name: package
+        run: |
+          mkdir stage
+          copy build\kof98native.exe stage\
+          copy build\lib\kof98.dll stage\
+          copy README.md stage\
+          Compress-Archive -Path stage\* -DestinationPath "kof98-windows-x86_64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kof98-windows-x86_64
+          path: kof98-windows-x86_64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build (shared lib)
+        run: sh build.sh
+      - name: package
+        run: |
+          mkdir stage
+          cp build/lib/libkof98.so README.md stage/
+          tar -czf kof98-linux-x86_64.tar.gz -C stage .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kof98-linux-x86_64
+          path: kof98-linux-x86_64.tar.gz
+
+  macos-intel:
+    runs-on: macos-13        # x86_64 runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: build (shared lib)
+        run: sh build.sh
+      - name: package
+        run: |
+          mkdir stage
+          cp build/lib/libkof98.dylib README.md stage/
+          tar -czf kof98-macos-x86_64.tar.gz -C stage .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kof98-macos-x86_64
+          path: kof98-macos-x86_64.tar.gz
+
+  macos-arm:
+    runs-on: macos-latest    # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: build (shared lib)
+        run: sh build.sh
+      - name: package
+        run: |
+          mkdir stage
+          cp build/lib/libkof98.dylib README.md stage/
+          tar -czf kof98-macos-arm64.tar.gz -C stage .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kof98-macos-arm64
+          path: kof98-macos-arm64.tar.gz
+
+  release:
+    needs: [windows, linux, macos-intel, macos-arm]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')   # only tags create a release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

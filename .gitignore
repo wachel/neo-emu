@@ -1,4 +1,5 @@
 .venv/**
 build/
-tools/
+tools/zig*/
 roms/
+__pycache__/

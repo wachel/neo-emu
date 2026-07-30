@@ -33,15 +33,10 @@ void z80_nmi() { g_nmi_pending = 1; }
 void z80_set_irq(int on) { g_irq_line = on; }
 u32 z80_get_pc() { return g_cpu.pc; }
 u8 z80_get_a() { return g_cpu.a; }
-u32 g_zfreq[65536];
-int g_zfreq_on = -1;
-u64 g_zskip_fire, g_zskip_nmi, g_zcalls;
 
 extern int g_z80_nmi_enabled;
 static int g_zparked;   // z80 parked in an idle loop by the slice skipper
 void z80_run_until(u64 target) {
-    if (g_zfreq_on < 0) g_zfreq_on = getenv("KOF98_ZFREQ") ? 1 : 0;
-    g_zcalls++;
     if (g_zparked) {
         // whole-call skip: the z80 is frozen in a no-exit idle loop; only an
         // interrupt can wake it (loop flags can't change while parked).
@@ -52,7 +47,7 @@ void z80_run_until(u64 target) {
     }
     while (g_z80_cyc < target) {
         if (g_irq_line) g_pins |= Z80_INT; else g_pins &= ~Z80_INT;
-        if (g_nmi_pending) { g_pins |= Z80_NMI; g_nmi_pending = 0; g_zskip_nmi++; }
+        if (g_nmi_pending) { g_pins |= Z80_NMI; g_nmi_pending = 0; }
         if ((g_pins & Z80_HALT) && !(g_pins & (Z80_INT | Z80_NMI))) {
             // halted with no wake source within this call: nothing observable
             // happens until the next IRQ, so skip the idle ticking entirely
@@ -67,7 +62,6 @@ void z80_run_until(u64 target) {
             if (g_pins & Z80_RD) {
                 if (g_pins & Z80_M1) {
                     g_pcring[g_pcring_pos++ & 511] = addr;
-                    if (g_zfreq_on) g_zfreq[addr]++;
                     // KOF98 sound-driver idle loop at 0x012b-0x0144: spins
                     // until a timer-IRQ bumps a RAM flag. With no INT/NMI
                     // pending the flags can't change within this call, so the
@@ -87,7 +81,6 @@ void z80_run_until(u64 target) {
                         // the in-flight fetch, then park for the rest of the
                         // slice and subsequent calls while no IRQ is pending
                         Z80_SET_DATA(g_pins, z80_mem_read(addr));
-                        g_zskip_fire++;
                         g_zparked = 1;
                         g_z80_cyc = target;
                         return;

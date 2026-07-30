@@ -3,7 +3,6 @@
 #include <windows.h>
 
 extern u16 g_vram_offset;
-void translated_init();     // provided by generated code (or stub)
 void bram_save();
 
 static HWND g_hwnd;
@@ -208,15 +207,6 @@ int main(int argc, char **argv) {
         return 0;
     }
     machine_init();
-    if (!getenv("KOF98_NOTRANS")) translated_init();
-    {   // KOF98_NOSEG=00,0a,0f: disable translation for listed segments (bisect debug)
-        const char *ns = getenv("KOF98_NOSEG");
-        if (ns) {
-            char buf[256]; strncpy(buf, ns, 255); buf[255] = 0;
-            for (char *t = strtok(buf, ","); t; t = strtok(NULL, ","))
-                g_segtab[strtoul(t, NULL, 16) & 0xFF] = NULL;
-        }
-    }
 
     const char *hl = getenv("KOF98_HEADLESS");
     if (hl) {
@@ -276,52 +266,14 @@ int main(int argc, char **argv) {
             }
         }
         if (getenv("KOF98_COV")) cov_dump();
-        if (getenv("KOF98_ZFREQ")) {
-            extern u32 g_zfreq[65536];
-            FILE *zf = fopen(getenv("KOF98_ZFREQ"), "w");
-            if (zf) {
-                for (int i = 0; i < 65536; i++)
-                    if (g_zfreq[i]) fprintf(zf, "%04x %u\n", i, g_zfreq[i]);
-                fclose(zf);
-            }
-        }
-        if (getenv("KOF98_CYCDUMP")) {
-            extern s32 g_cyc_rec[0x1000000];
-            FILE *cf = fopen(getenv("KOF98_CYCDUMP"), "w");
-            if (cf) {
-                for (u32 a = 0; a < 0x1000000; a += 2)
-                    if (g_cyc_rec[a]) fprintf(cf, "%06x %04x %d\n", a, mem_read16(a), g_cyc_rec[a]);
-                fclose(cf);
-            }
-        }
-        if (getenv("KOF98_OPFREQ")) {
-            extern u64 g_opfreq[65536];
-            FILE *of = fopen(getenv("KOF98_OPFREQ"), "w");
-            if (of) {
-                for (int i = 0; i < 65536; i++)
-                    if (g_opfreq[i]) fprintf(of, "%04x %llu\n", i, (unsigned long long)g_opfreq[i]);
-                fclose(of);
-            }
-        }
         bram_save();
         if (g_trace) fclose(g_trace);
         QueryPerformanceCounter(&pt1);
         double elms = (double)(pt1.QuadPart - pt0.QuadPart) * 1000.0 / (double)pfq.QuadPart;
         printf("perf: %d frames in %.1f ms = %.1f fps (%.3f ms/frame)\n",
                frames, elms, elms > 0 ? frames * 1000.0 / elms : 0.0, frames ? elms / frames : 0.0);
-        extern long long g_prof_cpu, g_prof_z80, g_prof_ym;
-        if (getenv("KOF98_PROF")) {
-            extern u64 g_zskip_fire, g_zskip_nmi, g_zcalls;
-            printf("prof: cpu=%.1fms z80=%.1fms ym=%.1fms other=%.1fms\n",
-                   g_prof_cpu * 1000.0 / pfq.QuadPart, g_prof_z80 * 1000.0 / pfq.QuadPart,
-                   g_prof_ym * 1000.0 / pfq.QuadPart,
-                   elms - (g_prof_cpu + g_prof_z80 + g_prof_ym) * 1000.0 / pfq.QuadPart);
-            printf("zskip: fire=%llu nmi=%llu calls=%llu\n",
-                   (unsigned long long)g_zskip_fire, (unsigned long long)g_zskip_nmi, (unsigned long long)g_zcalls);
-        }
         extern u64 g_audio_nonzero, g_audio_total, g_audio_clip;
-        extern u64 g_stat_fncalls, g_stat_interp;
-        printf("headless done: %d frames, cyc=%llu pc=%06x z80cyc=%llu z80pc=%04x z80a=%02x audio=%llu/%llu clip=%llu fncalls=%llu interp=%llu\n", frames, (unsigned long long)cpu.cyc, cpu.pc, (unsigned long long)g_z80_cyc, z80_get_pc(), z80_get_a(), g_audio_nonzero, g_audio_total, g_audio_clip, (unsigned long long)g_stat_fncalls, (unsigned long long)g_stat_interp);
+        printf("headless done: %d frames, cyc=%llu pc=%06x z80cyc=%llu z80pc=%04x z80a=%02x audio=%llu/%llu clip=%llu\n", frames, (unsigned long long)cpu.cyc, cpu.pc, (unsigned long long)g_z80_cyc, z80_get_pc(), z80_get_a(), g_audio_nonzero, g_audio_total, g_audio_clip);
         return 0;
     }
 

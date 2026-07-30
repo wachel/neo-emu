@@ -11,11 +11,7 @@ inline void set_S(int s) {
         cpu.S = (u8)s;
     }
 }
-inline void cpu_after_sr_change() {
-    set_S(cpu.S);
-    // iml may have dropped below a pending level: stop translated code ASAP
-    if (g_irq_level && (g_irq_level > cpu.iml || g_irq_level == 7)) g_stop_cyc = 0;
-}
+inline void cpu_after_sr_change() { set_S(cpu.S); }
 
 inline void cpu_exception(int vec, u32 push_pc) {
     if (getenv("KOF98_EXLOG"))

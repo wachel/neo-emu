@@ -1,7 +1,6 @@
 // Machine state, memory-map I/O, ROM loading, event scheduling.
 #include "rt.h"
 #include "romload.h"
-#include <windows.h>
 
 u8 *g_prom, *g_bios, *g_wram, *g_bram, *g_crom, *g_sfix, *g_s1, *g_zoomy;
 u8 *g_m1, *g_sm1, *g_vrom;
@@ -22,8 +21,6 @@ int g_kof98_prot_state;
 u8 g_in_p1 = 0xFF, g_in_p2 = 0xFF, g_in_start, g_in_coin = 0xFF, g_in_select = 0xFF;
 int g_in_service = 1;   // active low: 1 = not pressed
 u8 g_dsw = 0xFF;
-SegFn g_segtab[256];
-u8 g_seg_code[256];
 
 // video register state
 u16 g_vram_offset, g_vram_modulo, g_vram_readbuf;
@@ -350,19 +347,12 @@ void pal_write(u32 offset, u16 data) {
 }
 
 // ---- interrupts ----
-u64 g_stop_cyc;
-int g_prof_on = -1;
-long long g_prof_cpu, g_prof_z80, g_prof_ym;
-
 void update_irq_level() {
     int lv = 0;
     if (g_irq_vblank) lv = 1;
     if (g_irq_raster) lv = 2;
     if (g_irq3) lv = 3;
     g_irq_level = lv;
-    // wake translated code at the next instruction boundary when an
-    // interrupt becomes (or is) takable; cpu_run_until re-arms g_stop_cyc
-    if (lv && (lv > cpu.iml || lv == 7)) g_stop_cyc = 0;
 }
 
 void cpu_reset(int cold) {
@@ -462,11 +452,7 @@ void machine_frame() {
             u64 target = line_end;
             if (g_irq2_cycle && g_irq2_cycle < target) target = g_irq2_cycle;
             if (g_watchdog_cycle && g_watchdog_cycle < target) target = g_watchdog_cycle;
-            if (g_prof_on < 0) g_prof_on = getenv("KOF98_PROF") ? 1 : 0;
-            if (g_prof_on) { LARGE_INTEGER q0, q1; QueryPerformanceCounter(&q0);
-                cpu_run_until(target); QueryPerformanceCounter(&q1);
-                g_prof_cpu += q1.QuadPart - q0.QuadPart;
-            } else cpu_run_until(target);
+            cpu_run_until(target);
             if (g_irq2_cycle && cpu.cyc >= g_irq2_cycle) {
                 g_irq2_cycle = 0;
                 if (g_irq2_ctrl & 0x10) { g_irq_raster = 1; update_irq_level(); }
@@ -491,14 +477,8 @@ void machine_frame() {
             skip_video = getenv("KOF98_SKIP_VIDEO") ? 1 : 0;
         }
         if (!skip_audio) {
-            if (g_prof_on) { LARGE_INTEGER q0, q1, q2; QueryPerformanceCounter(&q0);
-                z80_run_until(cpu.cyc / 3); QueryPerformanceCounter(&q1);
-                ym2610_run_until((cpu.cyc * 2) / 3); QueryPerformanceCounter(&q2);
-                g_prof_z80 += q1.QuadPart - q0.QuadPart; g_prof_ym += q2.QuadPart - q1.QuadPart;
-            } else {
-                z80_run_until(cpu.cyc / 3);     // audio cpu at 4MHz
-                ym2610_run_until((cpu.cyc * 2) / 3);    // YM2610 at 8MHz
-            }
+            z80_run_until(cpu.cyc / 3);     // audio cpu at 4MHz
+            ym2610_run_until((cpu.cyc * 2) / 3);    // YM2610 at 8MHz
         }
         if (line < VISIBLE_LINES && !skip_video) video_line(line);
     }

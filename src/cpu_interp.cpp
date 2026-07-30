@@ -2,11 +2,6 @@
 #include "cpu_internal.h"
 
 u32 g_usp, g_ssp;
-u64 g_run_target;
-int g_badpc_dumped;
-u64 g_stat_fncalls, g_stat_interp;
-extern u32 g_pcring[1024];
-extern u32 g_pcring_pos;
 
 void cpu_check_irq() {
     int lv = g_irq_level;
@@ -41,15 +36,7 @@ static inline int spin_ff(u64 target) {
     return 0;
 }
 
-// KOF98_CYCDUMP=path: record per-instruction cycles for the translator's
-// cycle table. In-memory table (0=unseen, >0=stable cycles, -1=varying);
-// dumped at exit. Run with KOF98_NOSPIN=1 for a complete interpreter trace.
-s32 g_cyc_rec[0x1000000];
-static int g_cycdump = -1;
-
 void cpu_run_until(u64 target) {
-    if (g_cycdump < 0) g_cycdump = getenv("KOF98_CYCDUMP") ? 1 : 0;
-    g_run_target = target;
     u64 prev = ~(u64)0; int stagnant = 0;
     while (cpu.cyc < target) {
         g_ntrace = 10;
@@ -57,48 +44,8 @@ void cpu_run_until(u64 target) {
         if (cpu.stopped) { cpu.cyc = target; return; }
         if (spin_ff(target)) return;
         g_ntrace = 11;
-        if (g_cycdump) {
-            u32 pcb = cpu.pc; u64 cb = cpu.cyc;
-            cpu_interp_step();
-            int c = (int)(cpu.cyc - cb);
-            pcb &= 0xFFFFFF;
-            if (g_cyc_rec[pcb] == 0) g_cyc_rec[pcb] = c;
-            else if (g_cyc_rec[pcb] != c) g_cyc_rec[pcb] = -1;
-        } else {
-            SegFn fn = g_segtab[(cpu.pc >> 16) & 0xFF];
-            if (fn) {
-                u32 pc_in = cpu.pc;
-                u64 before = cpu.cyc;
-                static int trcall = -1;
-                if (trcall < 0) trcall = getenv("KOF98_TRCALL") ? 1 : 0;
-                if (trcall) fprintf(stderr, "CALL seg=%02x in=%06x cyc=%llu\n", (pc_in >> 16) & 0xFF, pc_in, (unsigned long long)before);
-                g_stop_cyc = target;    // arm checkpoint for translated code
-                g_stat_fncalls++;
-                fn();
-                if (trcall) fprintf(stderr, "  RET pc=%06x cyc=%llu\n", cpu.pc, (unsigned long long)cpu.cyc);
-                if ((cpu.pc >> 24) && !g_badpc_dumped) {
-                    g_badpc_dumped = 1;
-                    fprintf(stderr, "BADPC %06x from seg=%02x pc_in=%06x cyc=%llu d0=%08x d1=%08x a0=%06x a1=%06x a6=%06x a7=%06x sr=%04x\n",
-                            cpu.pc, (pc_in >> 16) & 0xFF, pc_in, (unsigned long long)cpu.cyc,
-                            cpu.D[0], cpu.D[1], cpu.A[0], cpu.A[1], cpu.A[6], cpu.A[7], cpu_get_sr());
-                }
-                if (cpu.cyc == before) cpu_interp_step();   // safety: guarantee progress
-            } else { g_stat_interp++; cpu_interp_step(); }
-        }
+        cpu_interp_step();
         g_ntrace = 1;
-        if ((cpu.pc >> 24) && !g_badpc_dumped) {
-            g_badpc_dumped = 1;
-            fprintf(stderr, "BADPC %06x cyc=%llu sr=%04x d0=%08x d1=%08x a0=%06x a6=%06x a7=%06x\nlast pcs:",
-                    cpu.pc, (unsigned long long)cpu.cyc, cpu_get_sr(), cpu.D[0], cpu.D[1], cpu.A[0], cpu.A[6], cpu.A[7]);
-            for (int k = 40; k >= 1; k--)
-                fprintf(stderr, " %06x", g_pcring[(g_pcring_pos - k) & 1023]);
-            fprintf(stderr, "\nstack @a7-16:");
-            for (int i = -16; i < 16; i += 2) {
-                u32 a = (cpu.A[7] + i) & 0xFFFE;
-                fprintf(stderr, " %04x", (g_wram[a] << 8) | g_wram[a + 1]);
-            }
-            fprintf(stderr, "\n");
-        }
         if (cpu.cyc == prev) {          // native infinite-loop guard
             if (++stagnant > 1000) {
                 fprintf(stderr, "STALL pc=%06x op=%04x cyc=%llu\n", cpu.pc,
@@ -130,8 +77,6 @@ static void op_imm_sr(int opc, int sz, u32 imm, u32 pc0, int &cyc) {
 
 u32 g_pcring[1024];
 u32 g_pcring_pos;
-u64 g_opfreq[65536];
-int g_opfreq_on = -1;
 void cpu_interp_step() {
     u32 pc0 = cpu.pc;
     g_pcring[g_pcring_pos++ & 1023] = pc0;
@@ -178,8 +123,6 @@ void cpu_interp_step() {
         if (trace_cond) trace_left--;
     }
     u16 op = nextw();
-    if (g_opfreq_on < 0) g_opfreq_on = getenv("KOF98_OPFREQ") ? 1 : 0;
-    if (g_opfreq_on) g_opfreq[op]++;
     int cyc = 0;
     int top = op >> 12;
 

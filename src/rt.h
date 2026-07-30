@@ -64,9 +64,6 @@ extern u64 g_irq2_cycle;                          // scheduled raster irq (0 = n
 extern u32 g_vcount_base_line;                    // line at g_frame_base
 extern u64 g_frame_base;                          // cpu cycle at line 0 of current frame
 
-// ---- translated-code checkpoint ----
-extern u64 g_stop_cyc;      // stop translated code when cpu.cyc reaches this (target, or 0 = IRQ pending)
-
 // ---- memory access ----
 u16 io_read16(u32 addr);
 void io_write16(u32 addr, u16 data);
@@ -165,8 +162,6 @@ extern int g_irq_level;     // highest pending level (0 = none)
 
 // translated code segment table: 256 slots (16MB / 64KB), nullptr = interpret
 typedef void (*SegFn)();
-extern SegFn g_segtab[256];
-extern u8 g_seg_code[256];  // per-64KB: 1 if segment has translated code
 // coverage log (debug builds): executed ROM addresses
 extern int g_cov_enabled;   // 0 default; KOF98_COV=1 enables
 void cov_mark(u32 addr);

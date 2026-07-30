@@ -1,6 +1,7 @@
 // Machine state, memory-map I/O, ROM loading, event scheduling.
 #include "rt.h"
 #include "romload.h"
+#include <windows.h>
 
 u8 *g_prom, *g_bios, *g_wram, *g_bram, *g_crom, *g_sfix, *g_s1, *g_zoomy;
 u8 *g_m1, *g_sm1, *g_vrom;
@@ -35,7 +36,7 @@ int g_frame_count;
 
 // coverage
 static u8 *g_cov;           // 16MB bitmap of instruction starts executed
-static int g_cov_enabled = 1;
+int g_cov_enabled;          // off by default (KOF98_COV=1 enables); per-instr cost otherwise
 
 static u8 *load_file(const char *path, size_t *sz) {
     FILE *f = fopen(path, "rb");
@@ -91,7 +92,7 @@ void rtc_write(u8 data) {
 // ---- Z80 audio subsystem ----
 static u8 g_z80_ram[0x800];
 static u32 g_z80_bank_base[4];  // g_m1 byte offsets: [0]=f000(2K) [1]=e000(4K) [2]=c000(8K) [3]=8000(16K)
-static int g_z80_nmi_enabled;
+int g_z80_nmi_enabled;      // z80 armed NMI via out($08); idle-park is only safe after this
 u8 g_sound_cmd;
 
 static void z80_banks_reset() {
@@ -349,12 +350,19 @@ void pal_write(u32 offset, u16 data) {
 }
 
 // ---- interrupts ----
+u64 g_stop_cyc;
+int g_prof_on = -1;
+long long g_prof_cpu, g_prof_z80, g_prof_ym;
+
 void update_irq_level() {
     int lv = 0;
     if (g_irq_vblank) lv = 1;
     if (g_irq_raster) lv = 2;
     if (g_irq3) lv = 3;
     g_irq_level = lv;
+    // wake translated code at the next instruction boundary when an
+    // interrupt becomes (or is) takable; cpu_run_until re-arms g_stop_cyc
+    if (lv && (lv > cpu.iml || lv == 7)) g_stop_cyc = 0;
 }
 
 void cpu_reset(int cold) {
@@ -454,7 +462,11 @@ void machine_frame() {
             u64 target = line_end;
             if (g_irq2_cycle && g_irq2_cycle < target) target = g_irq2_cycle;
             if (g_watchdog_cycle && g_watchdog_cycle < target) target = g_watchdog_cycle;
-            cpu_run_until(target);
+            if (g_prof_on < 0) g_prof_on = getenv("KOF98_PROF") ? 1 : 0;
+            if (g_prof_on) { LARGE_INTEGER q0, q1; QueryPerformanceCounter(&q0);
+                cpu_run_until(target); QueryPerformanceCounter(&q1);
+                g_prof_cpu += q1.QuadPart - q0.QuadPart;
+            } else cpu_run_until(target);
             if (g_irq2_cycle && cpu.cyc >= g_irq2_cycle) {
                 g_irq2_cycle = 0;
                 if (g_irq2_ctrl & 0x10) { g_irq_raster = 1; update_irq_level(); }
@@ -472,9 +484,23 @@ void machine_frame() {
             }
             break;
         }
-        z80_run_until(cpu.cyc / 3);     // audio cpu at 4MHz
-        ym2610_run_until((cpu.cyc * 2) / 3);    // YM2610 at 8MHz
-        if (line < VISIBLE_LINES) video_line(line);
+        // profiling switches: KOF98_SKIP_AUDIO / KOF98_SKIP_VIDEO skip subsystems
+        static int skip_audio = -1, skip_video = -1;
+        if (skip_audio < 0) {
+            skip_audio = getenv("KOF98_SKIP_AUDIO") ? 1 : 0;
+            skip_video = getenv("KOF98_SKIP_VIDEO") ? 1 : 0;
+        }
+        if (!skip_audio) {
+            if (g_prof_on) { LARGE_INTEGER q0, q1, q2; QueryPerformanceCounter(&q0);
+                z80_run_until(cpu.cyc / 3); QueryPerformanceCounter(&q1);
+                ym2610_run_until((cpu.cyc * 2) / 3); QueryPerformanceCounter(&q2);
+                g_prof_z80 += q1.QuadPart - q0.QuadPart; g_prof_ym += q2.QuadPart - q1.QuadPart;
+            } else {
+                z80_run_until(cpu.cyc / 3);     // audio cpu at 4MHz
+                ym2610_run_until((cpu.cyc * 2) / 3);    // YM2610 at 8MHz
+            }
+        }
+        if (line < VISIBLE_LINES && !skip_video) video_line(line);
     }
     g_frame_base += CYC_FRAME;
     g_frame_count++;
@@ -529,6 +555,7 @@ void machine_init() {
     g_cov = alloc_guarded("cov", 0x200000);
     g_prot_rom0 = (u16)((g_prom[0x100] << 8) | g_prom[0x101]);
     g_prot_rom1 = (u16)((g_prom[0x102] << 8) | g_prom[0x103]);
+    if (getenv("KOF98_COV")) g_cov_enabled = 1;
     pal_init();
     for (int i = 0; i < 0x2000; i++) pal_write(i & 0x1FFF, 0);
     g_palette_bank = 0;

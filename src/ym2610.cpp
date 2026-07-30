@@ -47,7 +47,13 @@ public:
     }
     void ymfm_set_busy_end(u32 clocks) override { busy_end = cur_cyc + clocks; }
     bool ymfm_is_busy() override { return cur_cyc < busy_end; }
-    void ymfm_update_irq(bool asserted) override { z80_set_irq(asserted ? 1 : 0); }
+    void ymfm_update_irq(bool asserted) override {
+    // KOF98_NO_ZINT: keep the z80 timer IRQ masked (sound engine never ticks,
+    // z80 idles in its wait loop). Command/NMI replies still work.
+    static int no_zint = -1;
+    if (no_zint < 0) no_zint = getenv("KOF98_NO_ZINT") ? 1 : 0;
+    if (!no_zint) z80_set_irq(asserted ? 1 : 0);
+}
     u8 ymfm_external_read(ymfm::access_class type, u32 address) override {
         (void)type;
         return g_vrom[address & 0xFFFFFF];
@@ -101,6 +107,27 @@ void ym2610_reset() {
 
 // ---- clocking: 144 master cycles per engine output sample (55.5kHz) ----
 void ym2610_run_until(u64 target) {
+    // KOF98_LITE_AUDIO: advance timers/busy only, skip waveform synthesis.
+    // Z80 keeps running (sound replies intact) but FM/ADPCM mixing cost is gone.
+    // Note: ADPCM playback state won't complete under this mode.
+    static int lite = -1;
+    if (lite < 0) lite = getenv("KOF98_LITE_AUDIO") ? 1 : 0;
+    if (lite) {
+        // event-driven: jump straight to the next timer expiry instead of
+        // stepping every clock (8MHz busy loop otherwise)
+        while (g_intf.cur_cyc < target) {
+            u64 next = target;
+            for (int t = 0; t < 2; t++)
+                if (g_intf.timer_exp[t] < next) next = g_intf.timer_exp[t];
+            g_intf.cur_cyc = next;
+            for (int t = 0; t < 2; t++)
+                if (g_intf.cur_cyc >= g_intf.timer_exp[t]) {
+                    g_intf.timer_exp[t] = ~(u64)0;
+                    g_intf.fire_timer(t);
+                }
+        }
+        return;
+    }
     static u32 gen_div;
     static double in_index, out_pos;    // resampler positions (input-sample units)
     static int prev_l, prev_r;

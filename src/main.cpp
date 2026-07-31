@@ -291,11 +291,15 @@ int main(int argc, char **argv) {
     }
     machine_init();
     state_init();
-    // optional: boot directly into a snapshot (same format as F5/DLL saves)
-    if (getenv("KOF98_LOAD_STATE")) {
-        if (!state_load_file(getenv("KOF98_LOAD_STATE")))
-            fprintf(stderr, "KOF98_LOAD_STATE: failed to load %s\n", getenv("KOF98_LOAD_STATE"));
+    // optional: --checkpoint <file> boots directly into a snapshot
+    // (same format as F5/DLL saves)
+    const char *checkpoint = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--checkpoint") && i + 1 < argc) checkpoint = argv[++i];
+        else if (!strncmp(argv[i], "--checkpoint=", 13)) checkpoint = argv[i] + 13;
     }
+    if (checkpoint && !state_load_file(checkpoint))
+        fprintf(stderr, "--checkpoint: failed to load %s\n", checkpoint);
 
     const char *hl = getenv("KOF98_HEADLESS");
     if (hl) {

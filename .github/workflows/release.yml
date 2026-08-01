@@ -49,22 +49,6 @@ jobs:
           name: kof98-linux-x86_64
           path: kof98-linux-x86_64.tar.gz
 
-  macos-intel:
-    runs-on: macos-13        # x86_64 runner
-    steps:
-      - uses: actions/checkout@v4
-      - name: build (shared lib)
-        run: sh build.sh
-      - name: package
-        run: |
-          mkdir stage
-          cp build/lib/libkof98.dylib README.md stage/
-          tar -czf kof98-macos-x86_64.tar.gz -C stage .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kof98-macos-x86_64
-          path: kof98-macos-x86_64.tar.gz
-
   macos-arm:
     runs-on: macos-latest    # Apple Silicon runner
     steps:

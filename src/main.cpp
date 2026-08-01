@@ -294,11 +294,15 @@ int main(int argc, char **argv) {
         ym2610_selftest("fmtest.raw");
         return 0;
     }
-    // --record <file>: 输入级录像 (启动快照+读档快照+每帧输入), 须在 machine_init 前设置
+    // --record <file>: 输入级录像; --replay <file>: 重放 (带窗口/声音;
+    // 配合 KOF98_HEADLESS=N 则为 headless 快速重放). 须在 machine_init 前设置
     void rec_set_path(const char *p);
+    static const char *s_replay_arg;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--record") && i + 1 < argc) rec_set_path(argv[++i]);
         else if (!strncmp(argv[i], "--record=", 9)) rec_set_path(argv[i] + 9);
+        else if (!strcmp(argv[i], "--replay") && i + 1 < argc) s_replay_arg = argv[++i];
+        else if (!strncmp(argv[i], "--replay=", 9)) s_replay_arg = argv[i] + 9;
     }
     machine_init();
     state_init();
@@ -312,11 +316,15 @@ int main(int argc, char **argv) {
     if (checkpoint && !state_load_file(checkpoint))
         fprintf(stderr, "--checkpoint: failed to load %s\n", checkpoint);
 
-    // ---- replay mode: KOF98_REPLAY=file rec 文件确定性重放 (headless) ----
-    // 可用 KOF98_HEADLESS=N 限制帧数, KOF98_SHOTS=1 每200帧截图,
-    // KOF98_WAVDUMP=out.raw 录音频; 结束后打印指纹供对比.
-    const char *rp = getenv("KOF98_REPLAY");
-    if (rp) {
+    // ---- replay: --replay=文件 或 KOF98_REPLAY=文件 ----
+    // 默认带窗口/声音实时重放; 加 KOF98_HEADLESS=N 则为 headless 快速重放 (限 N 帧,
+    // 可叠加 KOF98_SHOTS=1 每200帧截图, KOF98_WAVDUMP=out.raw 录音).
+    const char *rp = s_replay_arg;
+    if (!rp) rp = getenv("KOF98_REPLAY");
+    const char *hl = getenv("KOF98_HEADLESS");
+    FILE *g_rf = NULL;
+    int replay_frames = 0, replay_states = 0;
+    if (rp && hl) {          // headless 快速重放
         FILE *rf = fopen(rp, "rb");
         if (!rf) { fprintf(stderr, "replay: cannot open %s\n", rp); return 1; }
         u8 magic[5];
@@ -325,8 +333,7 @@ int main(int argc, char **argv) {
             fclose(rf);
             return 1;
         }
-        const char *hl2 = getenv("KOF98_HEADLESS");
-        int maxframes = hl2 ? atoi(hl2) : 0x7FFFFFFF;
+        int maxframes = atoi(hl);
         int shots = getenv("KOF98_SHOTS") != NULL;
         int frames = 0, states = 0;
         u8 inb[5];
@@ -372,7 +379,19 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    const char *hl = getenv("KOF98_HEADLESS");
+    // 窗口重放: 打开录像文件, 主循环里输入改从事件流读
+    if (rp) {
+        g_rf = fopen(rp, "rb");
+        if (!g_rf) { fprintf(stderr, "replay: cannot open %s\n", rp); return 1; }
+        u8 magic[5];
+        if (fread(magic, 1, 5, g_rf) != 5 || memcmp(magic, "K98R", 4) != 0 || magic[4] != 1) {
+            fprintf(stderr, "replay: bad file format\n");
+            fclose(g_rf);
+            return 1;
+        }
+        printf("replaying %s (windowed, real-time)\n", rp);
+    }
+
     if (hl) {
         int frames = atoi(hl);
         int coin_at = getenv("KOF98_COIN_AT") ? atoi(getenv("KOF98_COIN_AT")) : -1;
@@ -476,7 +495,41 @@ int main(int argc, char **argv) {
     while (!g_quit) {
         MSG msg;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessage(&msg); }
-        poll_input();
+        if (g_rf) {
+            // 重放: 输入来自录像事件流 ('S'=读档, 'I'=一帧输入)
+            int got = 0;
+            for (;;) {
+                int tag = fgetc(g_rf);
+                if (tag == 'S') {
+                    u32 len = 0;
+                    if (fread(&len, 4, 1, g_rf) != 1) break;
+                    if (len != (u32)g_state_size || fread(g_state_buf, 1, len, g_rf) != len) break;
+                    full_state_load(g_state_buf);
+                    ym2610_audio_resync();
+                    replay_states++;
+                    continue;
+                }
+                if (tag == 'I') {
+                    u8 b[5];
+                    if (fread(b, 1, 5, g_rf) == 5) {
+                        g_in_p1 = b[0]; g_in_p2 = b[1]; g_in_start = b[2];
+                        g_in_coin = b[3]; g_in_select = b[4];
+                        got = 1;
+                    }
+                }
+                break;
+            }
+            if (!got) {
+                printf("replay ended: %d frames (%.1fs), %d state loads\n",
+                       replay_frames, replay_frames / 59.19, replay_states);
+                break;
+            }
+            replay_frames++;
+            if (replay_frames % 600 == 0)
+                printf("replay: %.0fs\n", replay_frames / 59.19);
+        } else {
+            poll_input();
+        }
         osd_tick();
         QueryPerformanceCounter(&q0);
         machine_frame();

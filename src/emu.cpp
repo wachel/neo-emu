@@ -89,6 +89,7 @@ void rtc_write(u8 data) {
 // ---- Z80 audio subsystem ----
 static u8 g_z80_ram[0x800];
 static u32 g_z80_bank_base[4];  // g_m1 byte offsets: [0]=f000(2K) [1]=e000(4K) [2]=c000(8K) [3]=8000(16K)
+static u32 g_m1_sz = 0x40000;   // 实际 M1 大小 (bank 掩码依赖它, 与 MAME 一致)
 int g_z80_nmi_enabled;      // z80 armed NMI via out($08); idle-park is only safe after this
 u8 g_sound_cmd;
 
@@ -110,11 +111,22 @@ void rec_state_event(void);
 
 u8 z80_mem_read(u16 addr) {
     if (addr < 0x8000) return g_use_cart_audio ? g_m1[addr] : g_sm1[addr];
-    if (addr < 0xC000) return g_m1[(g_z80_bank_base[3] + (addr & 0x3FFF)) & 0x4FFFF];
-    if (addr < 0xE000) return g_m1[(g_z80_bank_base[2] + (addr & 0x1FFF)) & 0x4FFFF];
-    if (addr < 0xF000) return g_m1[(g_z80_bank_base[1] + (addr & 0x0FFF)) & 0x4FFFF];
-    if (addr < 0xF800) return g_m1[(g_z80_bank_base[0] + (addr & 0x07FF)) & 0x4FFFF];
-    return g_z80_ram[addr & 0x7FF];
+    // bank 窗口读: base 已在选择时按 MAME 公式掩码, 这里线性读 ROM, 不能再加掩码
+    // (旧代码 & 0x4FFFF 会把 bit16/17 清掉, 所有 banked 读全部塌缩到 M1 低 64K!)
+    u32 off; u8 v;
+    if (addr < 0xC000)      off = g_z80_bank_base[3] + (addr & 0x3FFF);
+    else if (addr < 0xE000) off = g_z80_bank_base[2] + (addr & 0x1FFF);
+    else if (addr < 0xF000) off = g_z80_bank_base[1] + (addr & 0x0FFF);
+    else if (addr < 0xF800) off = g_z80_bank_base[0] + (addr & 0x07FF);
+    else return g_z80_ram[addr & 0x7FF];
+    if (off >= 0x50000) off = 0x4FFFF;   // 防御 (理论上不会越界)
+    v = g_m1[off];
+    static FILE *rlog;
+    static int rlog_init;
+    if (!rlog_init) { rlog_init = 1; const char *p = getenv("KOF98_Z80RLOG"); if (p) rlog = fopen(p, "w"); }
+    if (rlog) fprintf(rlog, "pc=%04x addr=%04x m1=%05x v=%02x cyc=%llu\n",
+                      z80_get_pc(), addr, off, v, (unsigned long long)cpu.cyc);
+    return v;
 }
 void z80_mem_write(u16 addr, u8 data) {
     if (addr >= 0xF800) g_z80_ram[addr & 0x7FF] = data;
@@ -124,7 +136,11 @@ u8 z80_io_read(u16 port) {
     if (p >= 0x08 && p <= 0x0B) {   // NEO-ZMC bank select: READ with bank# in A8-A15
         int region = p - 0x08;
         u32 bank = (port >> 8) & 0xFF;
-        g_z80_bank_base[region] = 0x10000 + ((bank << (11 + region)) & 0x3FFFF);
+        // 与 MAME 一致: address_mask = (m1_size - 0x10000 - 1) & 0x3ffff
+        // (此前固定 0x3FFFF, 大号 bank 号会映射到错误的 ROM 区域 -> 音序器读到垃圾数据,
+        //  表现为 BGM 中途死掉或播放"奇怪的音乐")
+        u32 address_mask = (g_m1_sz - 0x10000 - 1) & 0x3FFFF;
+        g_z80_bank_base[region] = 0x10000 + ((bank << (11 + region)) & address_mask);
         if (getenv("KOF98_Z80LOG"))
             fprintf(stderr, "ZBANK r%d bank=%02x base=%05x zpc=%04x cmd=%02x cyc=%llu\n",
                     region, bank, g_z80_bank_base[region], z80_get_pc(), g_sound_cmd,
@@ -514,10 +530,15 @@ void machine_init() {
         fprintf(stderr, "ROMs: loaded from %s + %s\n", path, path2);
         g_prom = rs.prom; g_bios = rs.bios; g_sfix = rs.sfix; g_s1 = rs.s1;
         g_zoomy = rs.zoomy; g_crom = rs.crom; g_sm1 = rs.sm1; g_vrom = rs.vrom;
-        // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
+        // M1: 线性放入 0x50000 缓冲区 (bank 窗口经掩码后线性读 0x10000..sz-1,
+        // 与 MAME 一致); 顶端放一份低 64K 镜像仅作越界兜底.
+        // 注意: 不能再往 +0x10000 复制整份 M1 —— 那会把 bank 区 (0x10000..sz-1)
+        // 覆盖成 M1 开头, 导致音乐数据流全部读错 (BGM 死亡/奇怪音乐的根因)
         g_m1 = (u8 *)malloc(0x50000);
-        memcpy(g_m1, rs.m1, rs.m1_sz);
-        memcpy(g_m1 + 0x10000, rs.m1, rs.m1_sz);
+        memset(g_m1, 0, 0x50000);
+        memcpy(g_m1, rs.m1, rs.m1_sz < 0x40000 ? rs.m1_sz : 0x40000);
+        memcpy(g_m1 + 0x40000, rs.m1, rs.m1_sz < 0x10000 ? rs.m1_sz : 0x10000);
+        g_m1_sz = (u32)rs.m1_sz;
         free(rs.m1);
     } else {
         fprintf(stderr, "ROMs: %s/*.zip not usable, falling back to rom/*.bin\n", g_roms_dir);
@@ -529,12 +550,14 @@ void machine_init() {
         g_crom = load_file("rom/crom.bin", &sz);
         g_sm1 = load_file("rom/sm1.bin", &sz);
         g_vrom = load_file("rom/vrom.bin", &sz);
-        // M1: map into a 0x50000 region with the mandatory 0x10000 mirror (NEO-ZMC)
+        // M1: 同上 —— 线性放入, 顶端镜像仅作兜底 (见上方注释)
         g_m1 = (u8 *)malloc(0x50000);
         {
             u8 *t = load_file("rom/m1.bin", &sz);
-            memcpy(g_m1, t, sz);
-            memcpy(g_m1 + 0x10000, t, sz);
+            memset(g_m1, 0, 0x50000);
+            memcpy(g_m1, t, sz < 0x40000 ? sz : 0x40000);
+            memcpy(g_m1 + 0x40000, t, sz < 0x10000 ? sz : 0x10000);
+            g_m1_sz = (u32)sz;
             free(t);
         }
     }

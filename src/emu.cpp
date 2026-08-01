@@ -106,6 +106,7 @@ u8 ym2610_read(u16 port);
 void ym2610_write(u16 port, u8 data);
 void ym2610_run_until(u64 target);
 void ym2610_reset();
+void rec_state_event(void);
 
 u8 z80_mem_read(u16 addr) {
     if (addr < 0x8000) return g_use_cart_audio ? g_m1[addr] : g_sm1[addr];
@@ -433,7 +434,9 @@ void guards_check(int frame) {
 
 // ---- frame execution ----
 int g_frame_restart;
+static void rec_frame_event(void);
 void machine_frame() {
+    rec_frame_event();
     g_frame_restart = 0;
     for (int line = 0; line < LINES_FRAME; line++) {
         g_ntrace = 1;
@@ -557,12 +560,88 @@ void machine_init() {
     video_init();
     if (getenv("KOF98_TRACE")) g_trace = fopen("trace.txt", "w");
     cpu_reset(1);
+    rec_state_event();   // 录像: 记录启动快照 (KOF98_RECREC 开启时)
 }
 
 // ---------------------------------------------------------------------------
 // save-state (RL interface). Layout: scalar header, then the big RAM buffers.
 // ROMs and derived caches (fb/pens/spr8/cov) are intentionally excluded.
 // ---------------------------------------------------------------------------
+
+// full machine state (emu + z80 + ym), same K98S layout as kof98_api's
+// kof98_state_save, so replay files and .k98s checkpoints stay compatible.
+int emu_state_size(); void emu_state_save(u8 *buf); void emu_state_load(const u8 *buf);
+int z80_state_size(); void z80_state_save(u8 *buf); void z80_state_load(const u8 *buf);
+int ym_state_size(); void ym_state_save(u8 *buf); void ym_state_load(const u8 *buf);
+
+int full_state_size() { return 16 + emu_state_size() + z80_state_size() + ym_state_size(); }
+
+void full_state_save(u8 *buf) {
+    u32 esz = (u32)emu_state_size(), zsz = (u32)z80_state_size(), ysz = (u32)ym_state_size();
+    *(u32 *)(buf + 0) = 0x4B393853;      // 'K98S'
+    *(u32 *)(buf + 4) = 1;               // version
+    memcpy(buf + 8, &esz, 4);
+    memcpy(buf + 12, &ysz, 4);
+    u8 *p = buf + 16;
+    emu_state_save(p); p += esz;
+    z80_state_save(p); p += zsz;
+    ym_state_save(p);
+}
+
+void full_state_load(const u8 *buf) {
+    u32 esz, ysz;
+    memcpy(&esz, buf + 8, 4);
+    memcpy(&ysz, buf + 12, 4);
+    const u8 *p = buf + 16;
+    emu_state_load(p); p += esz;
+    z80_state_load(p); p += z80_state_size();
+    ym_state_load(p);
+}
+
+// ---------------------------------------------------------------------------
+// 录像 (KOF98_RECREC=文件): 启动快照 + 每次读档后的完整快照 + 每帧输入.
+// 用 exe 的 KOF98_REPLAY=文件 可确定性重放. 格式:
+//   "K98R" ver(1) | 'S' u32len state | 'I' p1 p2 start coin select ...
+// ---------------------------------------------------------------------------
+static FILE *g_rec;
+static int g_rec_init, g_rec_frames;
+static const char *g_rec_path;   // exe 可用 --record 指定 (优先于环境变量)
+
+void rec_set_path(const char *p) { g_rec_path = p; }
+
+static void rec_open(void) {
+    if (g_rec_init) return;
+    g_rec_init = 1;
+    const char *p = g_rec_path;
+    if (!p || !p[0]) p = getenv("KOF98_RECREC");
+    if (p && p[0]) {
+        g_rec = fopen(p, "wb");
+        if (g_rec) { fwrite("K98R", 1, 4, g_rec); fputc(1, g_rec); }
+    }
+}
+
+// 记录当前完整机器状态 (启动后/读档后调用)
+void rec_state_event(void) {
+    rec_open();
+    if (!g_rec) return;
+    static u8 *buf;
+    if (!buf) buf = (u8 *)malloc(full_state_size());
+    full_state_save(buf);
+    fputc('S', g_rec);
+    int n = full_state_size();
+    fwrite(&n, 4, 1, g_rec);
+    fwrite(buf, 1, n, g_rec);
+}
+
+static void rec_frame_event(void) {    // machine_frame 开头调用
+    rec_open();
+    if (!g_rec) return;
+    fputc('I', g_rec);
+    u8 b[5] = { g_in_p1, g_in_p2, g_in_start, g_in_coin, g_in_select };
+    fwrite(b, 1, 5, g_rec);
+    if (++g_rec_frames % 60 == 0) fflush(g_rec);   // 每秒冲刷, 崩溃也最多丢1秒
+}
+
 extern u32 g_usp, g_ssp;
 
 struct EmuStateHdr {

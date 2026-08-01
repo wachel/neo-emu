@@ -94,6 +94,9 @@ void kof98_state_save(void *buf_) {
     ym_state_save(buf);
 }
 
+void ym2610_audio_resync(void);
+void rec_state_event(void);
+
 void kof98_state_load(const void *buf_) {
     const u8 *buf = (const u8 *)buf_;
     u32 magic, esz, zsz, ysz;
@@ -106,6 +109,9 @@ void kof98_state_load(const void *buf_) {
     emu_state_load(buf); buf += esz;
     z80_state_load(buf); buf += zsz;
     ym_state_load(buf);
+    // 丢弃加载前时间线上残留的未播音频, 否则会在新场景开头听到一小段旧音效
+    ym2610_audio_resync();
+    rec_state_event();   // 录像: 记录读档后的完整状态 (KOF98_RECREC 开启时)
 }
 
 // ---- 68k PC 周期剖析 (诊断用) ----

@@ -182,6 +182,9 @@ static void save_bmp(const char *path) {
 // + ver + section sizes + emu/z80/ym), so snapshots are interchangeable with
 // the Python side: exe F5 -> usable as an RL checkpoint, and vice versa.
 int emu_state_size(); void emu_state_save(u8 *buf); void emu_state_load(const u8 *buf);
+void ym2610_audio_resync(void);
+void rec_state_event(void);
+void full_state_load(const u8 *buf);
 int z80_state_size(); void z80_state_save(u8 *buf); void z80_state_load(const u8 *buf);
 int ym_state_size();  void ym_state_save(u8 *buf);  void ym_state_load(const u8 *buf);
 
@@ -228,6 +231,8 @@ static int state_load_file(const char *path) {
     emu_state_load(p); p += esz;
     z80_state_load(p); p += z80_state_size();
     ym_state_load(p);
+    ym2610_audio_resync();   // 丢弃旧时间线的残留音频
+    rec_state_event();       // 录像: 记录读档后状态 (KOF98_RECREC 开启时)
     return 1;
 }
 
@@ -289,6 +294,12 @@ int main(int argc, char **argv) {
         ym2610_selftest("fmtest.raw");
         return 0;
     }
+    // --record <file>: 输入级录像 (启动快照+读档快照+每帧输入), 须在 machine_init 前设置
+    void rec_set_path(const char *p);
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--record") && i + 1 < argc) rec_set_path(argv[++i]);
+        else if (!strncmp(argv[i], "--record=", 9)) rec_set_path(argv[i] + 9);
+    }
     machine_init();
     state_init();
     // optional: --checkpoint <file> boots directly into a snapshot
@@ -300,6 +311,66 @@ int main(int argc, char **argv) {
     }
     if (checkpoint && !state_load_file(checkpoint))
         fprintf(stderr, "--checkpoint: failed to load %s\n", checkpoint);
+
+    // ---- replay mode: KOF98_REPLAY=file rec 文件确定性重放 (headless) ----
+    // 可用 KOF98_HEADLESS=N 限制帧数, KOF98_SHOTS=1 每200帧截图,
+    // KOF98_WAVDUMP=out.raw 录音频; 结束后打印指纹供对比.
+    const char *rp = getenv("KOF98_REPLAY");
+    if (rp) {
+        FILE *rf = fopen(rp, "rb");
+        if (!rf) { fprintf(stderr, "replay: cannot open %s\n", rp); return 1; }
+        u8 magic[5];
+        if (fread(magic, 1, 5, rf) != 5 || memcmp(magic, "K98R", 4) != 0 || magic[4] != 1) {
+            fprintf(stderr, "replay: bad file format\n");
+            fclose(rf);
+            return 1;
+        }
+        const char *hl2 = getenv("KOF98_HEADLESS");
+        int maxframes = hl2 ? atoi(hl2) : 0x7FFFFFFF;
+        int shots = getenv("KOF98_SHOTS") != NULL;
+        int frames = 0, states = 0;
+        u8 inb[5];
+        for (;;) {
+            int tag = fgetc(rf);
+            if (tag == EOF || frames >= maxframes) break;
+            if (tag == 'S') {
+                u32 len = 0;
+                if (fread(&len, 4, 1, rf) != 1) break;
+                if (len != (u32)g_state_size || fread(g_state_buf, 1, len, rf) != len) {
+                    fprintf(stderr, "replay: bad state event (len=%u)\n", len);
+                    break;
+                }
+                full_state_load(g_state_buf);
+                ym2610_audio_resync();
+                states++;
+            } else if (tag == 'I') {
+                if (fread(inb, 1, 5, rf) != 5) break;
+                g_in_p1 = inb[0]; g_in_p2 = inb[1]; g_in_start = inb[2];
+                g_in_coin = inb[3]; g_in_select = inb[4];
+                g_cur_frame = frames;
+                machine_frame();
+                frames++;
+                if (shots && frames % 200 == 0) {
+                    char nm[64]; snprintf(nm, 64, "shot_%04d.bmp", frames);
+                    save_bmp(nm);
+                }
+            } else {
+                fprintf(stderr, "replay: bad tag %02x at frame %d\n", tag, frames);
+                break;
+            }
+        }
+        fclose(rf);
+        save_bmp("frame.bmp");
+        // FNV-1a 指纹, 用于和原会话对比验证确定性
+        u32 h_w = 2166136261u, h_b = 2166136261u;
+        for (int i = 0; i < 0x10000; i++) { h_w ^= g_wram[i]; h_w *= 16777619u; }
+        for (int i = 0; i < 0x2000; i++) { h_b ^= g_bram[i]; h_b *= 16777619u; }
+        extern u64 g_audio_nonzero, g_audio_total, g_audio_clip;
+        printf("replay done: %d frames (%.1fs emu), %d state loads, cyc=%llu pc=%06x z80pc=%04x wram=%08x bram=%08x audio=%llu/%llu clip=%llu\n",
+               frames, frames / 59.19, states, (unsigned long long)cpu.cyc, cpu.pc, z80_get_pc(),
+               h_w, h_b, g_audio_nonzero, g_audio_total, g_audio_clip);
+        return 0;
+    }
 
     const char *hl = getenv("KOF98_HEADLESS");
     if (hl) {

@@ -94,6 +94,21 @@ void ym2610_write(u16 port, u8 data) {
     g_chip->write(port & 3, data);
 }
 
+// resampler state (moved out of ym2610_run_until so state loads can resync)
+static u32 g_gen_div;
+static double g_in_index, g_out_pos;
+static int g_prev_l, g_prev_r;
+
+// Drop all buffered/unplayed audio and resampler phase. Used on machine reset
+// and on save-state load: the ring holds audio from the OLD timeline, which
+// would otherwise be heard as a stray noise burst right after the load.
+void ym2610_audio_resync(void) {
+    audio_ring_clear();
+    g_gen_div = 0;
+    g_in_index = g_out_pos = 0.0;
+    g_prev_l = g_prev_r = 0;
+}
+
 void ym2610_reset() {
     if (!g_chip) {
         g_chip = new ymfm::ym2610(g_intf);
@@ -103,7 +118,7 @@ void ym2610_reset() {
     g_intf.cur_cyc = 0;
     g_intf.timer_exp[0] = g_intf.timer_exp[1] = ~(u64)0;
     g_intf.busy_end = 0;
-    audio_ring_clear();
+    ym2610_audio_resync();
 }
 
 // ---- save-state ----
@@ -171,9 +186,6 @@ void ym2610_run_until(u64 target) {
         }
         return;
     }
-    static u32 gen_div;
-    static double in_index, out_pos;    // resampler positions (input-sample units)
-    static int prev_l, prev_r;
     static FILE *wav = NULL;
     static int wav_init = 0;
     const double in_rate = 8000000.0 / 144.0;       // 55.5kHz engine output
@@ -190,30 +202,30 @@ void ym2610_run_until(u64 target) {
                 g_intf.timer_exp[t] = ~(u64)0;
                 g_intf.fire_timer(t);
             }
-        if (++gen_div < 144) continue;
-        gen_div = 0;
+        if (++g_gen_div < 144) continue;
+        g_gen_div = 0;
         ymfm::ym2610::output_data out;
         g_chip->generate(&out);
         // out.data[0]=FM+ADPCM L, [1]=R, [2]=SSG mono (mix to both)
         int ol = out.data[0] + out.data[2] / 2;
         int or_ = out.data[1] + out.data[2] / 2;
         // linear downsample 55.5k -> 44.1k: emit when output time falls in [prev, cur]
-        in_index += 1.0;
-        if (out_pos <= in_index) {
-            double f = out_pos - (in_index - 1.0);  // 0..1 position between prev and cur
+        g_in_index += 1.0;
+        if (g_out_pos <= g_in_index) {
+            double f = g_out_pos - (g_in_index - 1.0);  // 0..1 position between prev and cur
             if (f < 0.0) f = 0.0;
-            int l = prev_l + (int)((ol - prev_l) * f);
-            int r = prev_r + (int)((or_ - prev_r) * f);
+            int l = g_prev_l + (int)((ol - g_prev_l) * f);
+            int r = g_prev_r + (int)((or_ - g_prev_r) * f);
             if (l > 32767) { l = 32767; g_audio_clip++; }
             if (l < -32768) { l = -32768; g_audio_clip++; }
             if (r > 32767) { r = 32767; g_audio_clip++; }
             if (r < -32768) { r = -32768; g_audio_clip++; }
             audio_ring_push((s16)l, (s16)r);
             if (wav) { s16 b[2] = { (s16)l, (s16)r }; fwrite(b, 2, 2, wav); }
-            out_pos += step;
+            g_out_pos += step;
         }
-        prev_l = ol;
-        prev_r = or_;
+        g_prev_l = ol;
+        g_prev_r = or_;
     }
 }
 

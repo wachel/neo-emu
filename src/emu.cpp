@@ -110,13 +110,14 @@ void rec_state_event(void);
 
 u8 z80_mem_read(u16 addr) {
     if (addr < 0x8000) return g_use_cart_audio ? g_m1[addr] : g_sm1[addr];
-    // bank 窗口读: 镜像布局下 g_m1[0x10000..0x4FFFF] = M1[0..0x3FFFF],
-    // & 0x4FFFF 把越界读回卷进镜像区, 等效文件偏移 (bank<<shift)+w (不加 0x10000)
+    // bank 窗口读: 镜像布局下 g_m1[0x10000..0x4FFFF] = M1[0..0x3FFFF].
+    // base 和窗口均按窗口大小对齐，所以相加始终落在该镜像区；0x4FFFF 不是
+    // 0x50000 的回卷掩码，会错误清除 bit16/bit17 并把 M1 中间 128 KiB 映射到开头。
     u32 off; u8 v;
-    if (addr < 0xC000)      off = (g_z80_bank_base[3] + (addr & 0x3FFF)) & 0x4FFFF;
-    else if (addr < 0xE000) off = (g_z80_bank_base[2] + (addr & 0x1FFF)) & 0x4FFFF;
-    else if (addr < 0xF000) off = (g_z80_bank_base[1] + (addr & 0x0FFF)) & 0x4FFFF;
-    else if (addr < 0xF800) off = (g_z80_bank_base[0] + (addr & 0x07FF)) & 0x4FFFF;
+    if (addr < 0xC000)      off = g_z80_bank_base[3] + (addr & 0x3FFF);
+    else if (addr < 0xE000) off = g_z80_bank_base[2] + (addr & 0x1FFF);
+    else if (addr < 0xF000) off = g_z80_bank_base[1] + (addr & 0x0FFF);
+    else if (addr < 0xF800) off = g_z80_bank_base[0] + (addr & 0x07FF);
     else return g_z80_ram[addr & 0x7FF];
     v = g_m1[off];
 #ifdef KOF98_DIAG

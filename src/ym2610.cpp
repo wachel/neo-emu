@@ -68,23 +68,33 @@ public:
 static YmGlue g_intf;
 static ymfm::ym2610 *g_chip;
 
-u8 ym2610_read(u16 port) { return g_chip->read(port & 3); }
+u8 ym2610_read(u16 port) {
+    u8 v = g_chip->read(port & 3);
+#ifdef KOF98_DIAG
+    if (getenv("KOF98_YMLOG") && (port & 3) == 2)
+        fprintf(stderr, "YMSTS hi=%02x t=%.3f zpc=%04x\n", v,
+                (double)g_intf.cur_cyc / 8000000.0, z80_get_pc());
+#endif
+    return v;
+}
 void ym2610_write(u16 port, u8 data) {
     static u8 log_addr[2];
     {
         int half = (port >> 1) & 1;
         if (!(port & 1)) log_addr[half] = data;
         else if (getenv("KOF98_YMLOG"))
-            fprintf(stderr, "YM p%d r%02x=%02x t=%.3f\n", half, log_addr[half], data,
-                    (double)g_intf.cur_cyc / 8000000.0);
-        // trace trigger: first write of addr 0xA6 on port 0 after 4s
+            fprintf(stderr, "YM p%d r%02x=%02x t=%.3f zpc=%04x\n", half, log_addr[half], data,
+                    (double)g_intf.cur_cyc / 8000000.0, z80_get_pc());
+#ifdef KOF98_DIAG
+        // trace trigger: first YM write after KOF98_PTRIG seconds of YM time
         static int traced = 0;
-        if (!traced && half == 0 && !(port & 1) && data == 0xA6 &&
-            g_intf.cur_cyc > 4ULL * 8000000 && getenv("KOF98_ZTRACE")) {
+        static double trig_t = getenv("KOF98_PTRIG") ? atof(getenv("KOF98_PTRIG")) : 1e30;
+        if (!traced && (double)g_intf.cur_cyc / 8000000.0 > trig_t && getenv("KOF98_ZTRACE")) {
             traced = 1;
             void z80_trace_dump(FILE *f);
             z80_trace_dump(stderr);
         }
+#endif
     }
     if (getenv("KOF98_FORCEPAN") && (port & 1)) {
         int half = (port >> 1) & 1;
@@ -200,6 +210,15 @@ void ym2610_run_until(u64 target) {
         for (int t = 0; t < 2; t++)
             if (g_intf.cur_cyc >= g_intf.timer_exp[t]) {
                 g_intf.timer_exp[t] = ~(u64)0;
+#ifdef KOF98_DIAG
+                if (getenv("KOF98_YMLOG")) {
+                    static u64 last[2];
+                    fprintf(stderr, "TMR%d dt=%llu t=%.4f\n", t,
+                            (unsigned long long)(g_intf.cur_cyc - last[t]),
+                            (double)g_intf.cur_cyc / 8000000.0);
+                    last[t] = g_intf.cur_cyc;
+                }
+#endif
                 g_intf.fire_timer(t);
             }
         if (++g_gen_div < 144) continue;

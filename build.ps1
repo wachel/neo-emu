@@ -27,6 +27,8 @@ New-Item -ItemType Directory -Path build, build\lib -Force | Out-Null
 # x86_64_v3 = AVX2 baseline (2013+ CPUs). Use x86_64_v2 for older machines.
 $CPU = if ($env:KOF98_CPU) { $env:KOF98_CPU } else { "x86_64_v3" }
 $OPT = "-O3", "-std=c++17", "-mcpu=$CPU", "-Isrc"
+# KOF98_DIAG=1: 编入声音调试钩子 (Z80 PC 环/BADJMP/ZWR/CMDREAD/ZBANK/YMSTS/TMR 日志)
+if ($env:KOF98_DIAG) { $OPT += "-DKOF98_DIAG" }
 
 function Compile($src, $obj) {
     & $zig c++ @OPT -c -o $obj $src

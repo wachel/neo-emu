@@ -47,6 +47,10 @@ KOF98_EXPORT uint8_t  kof98_peek8(uint32_t addr);
 KOF98_EXPORT uint16_t kof98_peek16(uint32_t addr);
 KOF98_EXPORT uint32_t kof98_peek32(uint32_t addr);
 
+// Byte/word write to the 68k address space (cheats/pokes: WRAM at 0x100000..).
+KOF98_EXPORT void kof98_poke8(uint32_t addr, uint8_t v);
+KOF98_EXPORT void kof98_poke16(uint32_t addr, uint16_t v);
+
 // 68k PC 周期剖析 (诊断): start 清零并开启, dump 写出最热区域到文件
 KOF98_EXPORT void kof98_prof_start(void);
 KOF98_EXPORT int kof98_prof_dump(const char *path);

@@ -64,6 +64,10 @@ uint8_t  kof98_peek8(uint32_t addr)  { return mem_read8(addr); }
 uint16_t kof98_peek16(uint32_t addr) { return mem_read16(addr); }
 uint32_t kof98_peek32(uint32_t addr) { return mem_read32(addr); }
 
+// Byte/word write to the 68k address space (cheats/pokes: WRAM at 0x100000..).
+void kof98_poke8(uint32_t addr, uint8_t v)  { mem_write8(addr, v); }
+void kof98_poke16(uint32_t addr, uint16_t v) { mem_write16(addr, v); }
+
 const uint32_t *kof98_framebuffer(int *width, int *height) {
     if (width) *width = 320;
     if (height) *height = 224;
